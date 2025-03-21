@@ -1,3 +1,4 @@
 numpy>=1.20.0
 PyQt5>=5.15.0
 pytest>=7.0.0
+potpourri3d>=1.2.1
