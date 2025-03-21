@@ -81,7 +81,7 @@ To test stroke recording:
 4. Create and select a mesh
 5. Register the script job to monitor mesh changes: `capture.register_script_job()`
 6. Sculpt
-7. ***!!! VERY IMPORTANT !!!** Unregister the script job: `capture.unregister_script_job()` 
+7. **!!! VERY IMPORTANT !!!** Unregister the script job: `capture.unregister_script_job()` 
 8. Access the recorded workflow data: `print(capture.current_workflow)`.
 
 ### Stroke parameterization
