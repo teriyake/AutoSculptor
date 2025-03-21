@@ -1,0 +1,18 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.10.8, pytest-8.3.4, pluggy-1.5.0
+rootdir: /Users/teriyake/s25/660/AutoSculptor
+collected 54 items
+
+tests/test_geodesic_calculator.py ..........                             [ 18%]
+tests/test_neighborhood.py ........                                      [ 33%]
+tests/test_parameterization.py ................                          [ 62%]
+tests/test_similarity.py .........                                       [ 79%]
+tests/test_synthesis.py ...........                                      [100%]
+
+=============================== warnings summary ===============================
+autosculptor/maya/test_ui.py:19
+  /Users/teriyake/s25/660/AutoSculptor/autosculptor/maya/test_ui.py:19: PytestCollectionWarning: cannot collect test class 'TestUI' because it has a __init__ constructor (from: autosculptor/maya/test_ui.py)
+    class TestUI:
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 54 passed, 1 warning in 0.46s =========================
