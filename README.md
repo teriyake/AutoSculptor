@@ -94,7 +94,7 @@ pytest tests/test_parameterization.py
 pytest tests/test_geodesic_calculator.py tests/test_neighborhood.py tests/test_similarity.py
 ```
 
-## Suggestion Synthesis
+### Suggestion Synthesis
 ```bash
 pytest tests/test_synthesis.py
 ```
