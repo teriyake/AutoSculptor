@@ -66,7 +66,7 @@ class SculptCapture:
 			size = size if size is not None else 1.0
 			strength = strength if strength is not None else 1.0
 
-			strength = max(0.0, min(strength, 1.0))
+			strength /= 100
 			return size, strength
 
 		except Exception as e:

@@ -84,6 +84,8 @@ To test stroke recording:
 7. ***!!! VERY IMPORTANT !!!** Unregister the script job: `capture.unregister_script_job()` 
 8. Access the recorded workflow data: `print(capture.current_workflow)`.
 
+Alternatively, run `maya/capture_ui.py` and use the user interface.
+
 ### Stroke parameterization
 ```bash
 pytest tests/test_parameterization.py
