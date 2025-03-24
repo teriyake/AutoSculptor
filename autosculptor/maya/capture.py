@@ -6,7 +6,7 @@ from autosculptor.core.data_structures import Sample, Stroke, Workflow
 from autosculptor.core.mesh_interface import MeshInterface
 from autosculptor.analysis.synthesis import StrokeSynthesizer
 from autosculptor.analysis.parameterization import StrokeParameterizer
-from autosculptor.maya.viewport_drawer import ViewportDataCache
+from autosculptor.suggestions.visualization import StrokeVisualizer
 
 
 class SculptCapture:
@@ -64,8 +64,6 @@ class SculptCapture:
 			return None
 
 		try:
-			# size = cmds.artAttrCtx(tool_name, q=True, r=True)
-			# strength = cmds.artAttrCtx(tool_name, q=True, st=True)
 			size = cmds.sculptMeshCacheCtx(tool_name, q=True, sz=True)
 			strength = cmds.sculptMeshCacheCtx(tool_name, q=True, st=True)
 
@@ -151,6 +149,10 @@ class SculptCapture:
 			if len(self.current_workflow.strokes) > 1:
 				self.generate_suggestions()
 
+			if len(self.current_suggestions) > 0:
+				visualizer = StrokeVisualizer(self.current_suggestions)
+				visualizer.visualize(0.2, 8)
+
 		except Exception as e:
 			print(f"Error in process_mesh_changes: {e}")
 			import traceback
@@ -191,30 +193,12 @@ class SculptCapture:
 			if not mesh_data:
 				return
 
-			selection_list = om2.MSelectionList()
-			selection_list.add(self.mesh_name)
-			dag_path = selection_list.getDagPath(0)
-
-			transform_mobj = dag_path.transform()
-			transform_fn = om2.MFnTransform(transform_mobj)
-
-			matrix = transform_fn.transformation().asMatrix()
-			ViewportDataCache().set_mesh_transform(matrix)
-
 			if not self.synthesizer:
 				self.synthesizer = StrokeSynthesizer(mesh_data)
 
 			self.current_suggestions = self.synthesizer.synthesize_next_stroke(
 				self.current_workflow, 1.0, 1.0, 10
 			)
-
-			ViewportDataCache().update_suggestions(self.current_suggestions)
-
-			from maya.api.OpenMayaUI import M3dView
-
-			view = M3dView.active3dView()
-			view.refresh(True, True)
-			# cmds.refresh(currentView=True, force=False)
 
 		except Exception as e:
 			print(f"Error in generate_suggestions: {str(e)}")
@@ -249,3 +233,7 @@ class SculptCapture:
 			print("Unregistered script job")
 		else:
 			print("No script job to unregister.")
+
+	def clear_suggestions(self):
+		"""Clears the current suggestion strokes."""
+		self.current_suggestions = []
