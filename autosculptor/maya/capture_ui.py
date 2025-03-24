@@ -4,6 +4,7 @@ import sys
 import os
 
 from autosculptor.core.data_structures import Sample, Stroke, Workflow
+from autosculptor.maya.viewport_drawer import ViewportDataCache
 from functools import partial
 
 
@@ -20,6 +21,8 @@ class SculptCaptureUI:
 
 		self.is_capturing = False
 		self.create_ui()
+		self.viewport_cache = ViewportDataCache()
+		self.drawer_node = None
 
 	def create_ui(self):
 		if cmds.window(self.WINDOW_NAME, exists=True):
@@ -104,6 +107,8 @@ class SculptCaptureUI:
 		cmds.showWindow(self.WINDOW_NAME)
 		self.update_stats()
 
+		# cmds.scriptJob(event=["SelectionChanged", self.update_viewport_suggestions])
+
 	def select_mesh(self, *args):
 		mesh_name = self.capture.get_selected_mesh_name()
 		if mesh_name:
@@ -122,12 +127,15 @@ class SculptCaptureUI:
 				om2.MGlobal.displayError("Please select a mesh first")
 				return
 
+		self.setup_viewport_drawing()
 		self.capture.register_script_job()
 
 		self.is_capturing = True
 		cmds.button(self.start_button, edit=True, enable=False)
 		cmds.button(self.stop_button, edit=True, enable=True)
 		cmds.text(self.status_text, edit=True, label="✓ Capturing strokes...")
+
+		self.update_viewport_suggestions()
 
 	def stop_capture(self, *args):
 		self.capture.unregister_script_job()
@@ -137,6 +145,39 @@ class SculptCaptureUI:
 		cmds.button(self.stop_button, edit=True, enable=False)
 		cmds.text(self.status_text, edit=True, label="Capture stopped")
 		self.update_stats()
+
+	def setup_viewport_drawing(self):
+		"""Create and configure viewport overlay"""
+		if not cmds.objExists("AutoSculptorOverlay"):
+			self.drawer_node = cmds.createNode("transform", name="AutoSculptorOverlay")
+			cmds.setAttr(self.drawer_node + ".overrideEnabled", 1)
+			# cmds.setAttr(self.drawer_node + ".overrideDisplayType", 2)
+			cmds.setAttr(self.drawer_node + ".overrideDisplayType", 0)
+
+		if not cmds.objExists("AutoSculptorDrawNode"):
+			draw_node = cmds.createNode(
+				"autoSculptorDrawOverride",
+				name="AutoSculptorDrawNode",
+				parent="AutoSculptorOverlay",
+			)
+			# cmds.parent(draw_node, "AutoSculptorOverlay")
+			cmds.setAttr(draw_node + ".overrideEnabled", 1)
+
+		cmds.setAttr("AutoSculptorOverlay.overrideEnabled", 1)
+		cmds.setAttr("AutoSculptorOverlay.overrideVisibility", 0)
+		cmds.setAttr("AutoSculptorOverlay.overrideDisplayType", 0)
+
+	def update_viewport_suggestions(self, *args):
+		"""Main update method for viewport suggestions"""
+		if not self.capture.mesh_name:
+			return
+
+		try:
+			self.viewport_cache.update_suggestions(self.capture.current_suggestions)
+			self.refresh_viewport()
+
+		except Exception as e:
+			print(f"Suggestion update failed: {str(e)}")
 
 	def create_test_object(self, *args):
 		sphere_name = "autoSculptorTestSphere"
@@ -219,9 +260,18 @@ class SculptCaptureUI:
 		else:
 			cmds.text(self.stats_text, edit=True, label="No data captured yet")
 
+	def refresh_viewport(self):
+		cmds.refresh(currentView=True, force=False)
+
 	def on_close(self, *args):
 		if self.is_capturing:
 			self.stop_capture()
+
+		if self.drawer_node and cmds.objExists(self.drawer_node):
+			cmds.delete(self.drawer_node)
+
+		self.viewport_cache.update_suggestions([])
+		self.refresh_viewport()
 
 	@staticmethod
 	def launch(sculpt_capture_instance=None):

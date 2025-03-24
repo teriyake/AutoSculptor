@@ -41,7 +41,7 @@ class StrokeParameterizer:
 				total_arc_length += np.linalg.norm(
 					stroke.samples[i].position - stroke.samples[i - 1].position
 				)
-			print(f"Total arc length: {total_arc_length}")
+			# print(f"Total arc length: {total_arc_length}")
 
 			cumulative_arc_length = 0.0
 			for i, sample in enumerate(stroke.samples):
@@ -54,9 +54,9 @@ class StrokeParameterizer:
 					if total_arc_length > 0
 					else 0.0
 				)
-				print(
-					f"Sample {i}: cumulative_arc_length={cumulative_arc_length}, ts={sample.ts}"
-				)
+				# print(
+				# f"Sample {i}: cumulative_arc_length={cumulative_arc_length}, ts={sample.ts}"
+				# )
 
 				min_dist = float("inf")
 				closest_stroke_sample_index = 0
@@ -75,9 +75,9 @@ class StrokeParameterizer:
 					closest_sample.position, np.array([sample.position])
 				)[0]
 
-				print(
-					f"Sample {i}: closest_sample_pos={closest_sample.position}, sample_pos={sample.position}, geodesic_dist={geodesic_dist}"
-				)
+				# print(
+				# f"Sample {i}: closest_sample_pos={closest_sample.position}, sample_pos={sample.position}, geodesic_dist={geodesic_dist}"
+				# )
 
 				test_pos_plus = sample.position + sample.normal * 0.001
 				test_pos_minus = sample.position - sample.normal * 0.001
@@ -319,7 +319,7 @@ class StrokeParameterizer:
 		self, sample: Sample, original_stroke: Stroke, stroke_type: str
 	) -> Tuple[np.ndarray, np.ndarray]:
 		if stroke_type == "surface":
-			print(f"ts: {sample.ts}, ds: {sample.ds}")
+			# print(f"ts: {sample.ts}, ds: {sample.ds}")
 			return self.inverse_parameterize_surface(
 				original_stroke, sample.ts, sample.ds, sample
 			)

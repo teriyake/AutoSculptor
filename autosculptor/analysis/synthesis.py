@@ -15,7 +15,12 @@ from autosculptor.analysis.neighborhood import calculate_stroke_neighborhoods
 class StrokeSynthesizer:
 	def __init__(self, mesh_data: MeshData):
 		self.mesh_data = mesh_data
-		self.parameterizer = StrokeParameterizer(mesh_data)
+		self.parameterizer = None
+
+		if mesh_data and hasattr(mesh_data, "vertices"):
+			self.parameterizer = StrokeParameterizer(mesh_data)
+		else:
+			print("Warning: StrokeSynthesizer created without valid mesh data")
 
 	def initialize_suggestions(self, current_workflow: Workflow) -> List[Stroke]:
 		"""
@@ -120,6 +125,10 @@ class StrokeSynthesizer:
 
 				suggestions.append(new_suggestion)
 
+		print(f"Generated {len(suggestions)} suggestions")
+		for i, s in enumerate(suggestions):
+			print(f"Suggestion {i}: {len(s.samples)} samples")
+
 		return suggestions
 
 	def _calculate_energy(
@@ -148,9 +157,9 @@ class StrokeSynthesizer:
 				wn=0.3,
 				wc=0.2,
 			)
-			print(
-				f"Candidate Stroke Energy - Past Stroke Index: {i}, Neighborhood Distance: {neighborhood_distance}"
-			)
+			# print(
+			# f"Candidate Stroke Energy - Past Stroke Index: {i}, Neighborhood Distance: {neighborhood_distance}"
+			# )
 
 			#  TODO: Θ(bo) constrains... set to zero for now.
 			application_constraint = 0.0
@@ -173,10 +182,10 @@ class StrokeSynthesizer:
 		Synthesizes the next stroke based on the energy function (Equation 11).
 
 		Args:
-		    current_workflow: The current workflow.
+			current_workflow: The current workflow.
 
 		Returns:
-		    The synthesized stroke (or None if no suitable stroke is found).
+			The synthesized stroke (or None if no suitable stroke is found).
 		"""
 		candidate_strokes = self.initialize_suggestions(current_workflow)
 
@@ -193,11 +202,19 @@ class StrokeSynthesizer:
 				max_spatial_distance,
 				max_temporal_difference,
 			)
+			print(f"Candidate Stroke Energy: {energy}")
 			if energy < min_energy:
 				min_energy = energy
 				best_stroke = candidate_stroke
 
+		print(f"Minimum energy: {min_energy}")
+
 		if min_energy > energy_threshold:
 			return None
+
+		if best_stroke:
+			print(f"Best stroke positions:")
+			for i, sample in enumerate(best_stroke.samples):
+				print(f"Sample {i}: {sample.position} (normal: {sample.normal})")
 
 		return best_stroke

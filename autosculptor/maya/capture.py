@@ -3,6 +3,10 @@ import maya.api.OpenMaya as om2
 import numpy as np
 
 from autosculptor.core.data_structures import Sample, Stroke, Workflow
+from autosculptor.core.mesh_interface import MeshInterface
+from autosculptor.analysis.synthesis import StrokeSynthesizer
+from autosculptor.analysis.parameterization import StrokeParameterizer
+from autosculptor.maya.viewport_drawer import ViewportDataCache
 
 
 class SculptCapture:
@@ -15,6 +19,8 @@ class SculptCapture:
 		self.current_workflow = Workflow()
 		self.script_job_number = None
 		self.mesh_name = None
+		self.synthesizer = None
+		self.current_suggestions = []
 		print("SculptCapture initialized.")
 
 	def get_world_space_positions(self, mesh_name):
@@ -132,9 +138,18 @@ class SculptCapture:
 				current_stroke.add_sample(s)
 
 			if len(current_stroke) > 0:
+				mesh_data = MeshInterface.get_mesh_data(self.mesh_name)
+				if not mesh_data:
+					return
+
+				parameterizer = StrokeParameterizer(mesh_data)
+				parameterizer.parameterize_stroke(current_stroke, [0, 0, 1])
 				self.current_workflow.add_stroke(current_stroke)
 
 			self.previous_positions[self.mesh_name] = current_points
+
+			if len(self.current_workflow.strokes) > 1:
+				self.generate_suggestions()
 
 		except Exception as e:
 			print(f"Error in process_mesh_changes: {e}")
@@ -163,6 +178,50 @@ class SculptCapture:
 		except Exception as e:
 			om2.MGlobal.displayError(f"Error while selecting a mesh: {e}")
 			return None
+
+	def generate_suggestions(self):
+		"""Generate autocomplete suggestions using StrokeSynthesizer"""
+		if not self.mesh_name or not cmds.objExists(self.mesh_name):
+			print("Mesh no longer exists, clearing reference")
+			self.mesh_name = None
+			return
+
+		try:
+			mesh_data = MeshInterface.get_mesh_data(self.mesh_name)
+			if not mesh_data:
+				return
+
+			selection_list = om2.MSelectionList()
+			selection_list.add(self.mesh_name)
+			dag_path = selection_list.getDagPath(0)
+
+			transform_mobj = dag_path.transform()
+			transform_fn = om2.MFnTransform(transform_mobj)
+
+			matrix = transform_fn.transformation().asMatrix()
+			ViewportDataCache().set_mesh_transform(matrix)
+
+			if not self.synthesizer:
+				self.synthesizer = StrokeSynthesizer(mesh_data)
+
+			self.current_suggestions = self.synthesizer.synthesize_next_stroke(
+				self.current_workflow, 1.0, 1.0, 10
+			)
+
+			ViewportDataCache().update_suggestions(self.current_suggestions)
+
+			from maya.api.OpenMayaUI import M3dView
+
+			view = M3dView.active3dView()
+			view.refresh(True, True)
+			# cmds.refresh(currentView=True, force=False)
+
+		except Exception as e:
+			print(f"Error in generate_suggestions: {str(e)}")
+			import traceback
+
+			traceback.print_exc()
+			self.mesh_name = None
 
 	def register_script_job(self):
 		"""Registers a script job to monitor for changes after sculpting."""

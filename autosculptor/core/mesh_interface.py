@@ -27,9 +27,46 @@ class MeshData:
 		self.faces = []
 		self.maya_dag_path = None
 		self.maya_mesh_fn = None
+		self.original_faces = []  # for normal calculation after triangulation
 
 	def __repr__(self):
 		return f"MeshData(vertices={len(self.vertices)}, faces={len(self.faces)})"
+
+	def triangulate(self):
+		"""Triangulates the mesh data.
+
+		This modifies the self.faces and self.normals arrays in-place.
+		It uses the Maya API for triangulation and correct normal handling.
+		"""
+		if not self.maya_mesh_fn:
+			raise RuntimeError("Cannot triangulate without Maya mesh function.")
+
+		triangles = om.MIntArray()
+		triangle_vertices = om.MIntArray()
+		self.maya_mesh_fn.getTriangles(triangles, triangle_vertices)
+
+		self.faces = np.array(triangle_vertices).reshape(-1, 3)
+
+		new_normals = []
+		# util = om.MScriptUtil()
+
+		for i in range(self.faces.shape[0]):
+			v1_idx, v2_idx, v3_idx = self.faces[i]
+
+			v1 = self.vertices[v1_idx]
+			v2 = self.vertices[v2_idx]
+			v3 = self.vertices[v3_idx]
+
+			normal = np.cross(v2 - v1, v3 - v1)
+			normal = normal / (np.linalg.norm(normal) + 1e-8)
+			new_normals.extend([normal, normal, normal])
+
+		self.normals = np.array(new_normals)
+
+		if len(self.normals) != len(triangle_vertices):
+			raise RuntimeError(
+				f"Normal count ({len(self.normals)}) does not match vertex count after triangulation ({len(triangle_vertices)})"
+			)
 
 
 class MeshInterface:
@@ -43,10 +80,10 @@ class MeshInterface:
 		Get mesh data from a Maya mesh.
 
 		Args:
-		    mesh_name (str): Name of the mesh in Maya
+			mesh_name (str): Name of the mesh in Maya
 
 		Returns:
-		    MeshData: Object containing mesh data
+			MeshData: Object containing mesh data
 		"""
 		mesh_data = MeshData()
 
@@ -71,14 +108,21 @@ class MeshInterface:
 		points = om.MPointArray()
 		mesh_fn.getPoints(points)
 
-		for i in range(points.length()):
-			mesh_data.vertices.append([points[i].x, points[i].y, points[i].z])
+		mesh_data.vertices = np.array(
+			[[points[i].x, points[i].y, points[i].z] for i in range(points.length())],
+			dtype=np.float64,
+		)
 
 		normals = om.MFloatVectorArray()
 		mesh_fn.getNormals(normals)
 
-		for i in range(normals.length()):
-			mesh_data.normals.append([normals[i].x, normals[i].y, normals[i].z])
+		mesh_data.normals = np.array(
+			[
+				[normals[i].x, normals[i].y, normals[i].z]
+				for i in range(normals.length())
+			],
+			dtype=np.float64,
+		)
 
 		polygon_counts = om.MIntArray()
 		polygon_connects = om.MIntArray()
@@ -91,7 +135,9 @@ class MeshInterface:
 			for j in range(count):
 				face.append(polygon_connects[face_index])
 				face_index += 1
-			mesh_data.faces.append(face)
+			mesh_data.original_faces.append(face)
+
+		mesh_data.triangulate()
 
 		return mesh_data
 
@@ -101,34 +147,35 @@ class MeshInterface:
 		Update the vertices of a Maya mesh.
 
 		Args:
-		    mesh_data (MeshData): Mesh data object with Maya references
-		    new_vertices (list): New vertex positions
+			mesh_data (MeshData): Mesh data object with Maya references
+			new_vertices (list): New vertex positions
 		"""
 		if not MAYA_AVAILABLE:
 			print("Maya is not available. Cannot update mesh vertices.")
 			return
-		points = om.MPointArray()
-		for i in range(len(new_vertices)):
-			points.append(
-				om.MPoint(new_vertices[i][0], new_vertices[i][1], new_vertices[i][2])
-			)
+
+		if isinstance(new_vertices, np.ndarray):
+			points = om.MPointArray()
+			for i in range(new_vertices.shape[0]):
+				points.append(
+					om.MPoint(
+						new_vertices[i, 0], new_vertices[i, 1], new_vertices[i, 2]
+					)
+				)
+		else:
+			points = om.MPointArray()
+			for i in range(len(new_vertices)):
+				points.append(
+					om.MPoint(
+						new_vertices[i][0], new_vertices[i][1], new_vertices[i][2]
+					)
+				)
 
 		mesh_data.maya_mesh_fn.setPoints(points)
-
 		mesh_data.vertices = new_vertices
 
 	@staticmethod
 	def find_closest_point(mesh_data, point):
-		"""
-		Find the closest point on the mesh to a given point.
-
-		Args:
-		    mesh_data (MeshData): Mesh data object
-		    point (list or tuple): 3D point to find closest point to
-
-		Returns:
-		    tuple: (closest_point, normal, face_id)
-		"""
 		if not MAYA_AVAILABLE:
 			print("Maya is not available. Cannot find closest point.")
 			return None, None, None
@@ -144,6 +191,7 @@ class MeshInterface:
 		)
 
 		face_id_value = om.MScriptUtil.getInt(face_id)
+
 		mesh_data.maya_mesh_fn.getFaceVertexNormal(face_id_value, 0, closest_normal)
 
 		closest_point_list = [closest_point.x, closest_point.y, closest_point.z]
@@ -153,26 +201,9 @@ class MeshInterface:
 
 	@staticmethod
 	def get_vertex_normals_for_indices(mesh_data, vertex_indices):
-		"""
-		Get normals for specific vertices of a Maya mesh.
-		Args:
-		    mesh_data (MeshData): Mesh data object with Maya references
-		    vertex_indices (list): List of vertex indices
-		Returns:
-		    np.ndarray: Array of vertex normals (each normal is a np.array of size 3)
-		"""
+
 		if not MAYA_AVAILABLE:
 			print("Maya is not available. Cannot get vertex normals.")
 			return np.zeros((len(vertex_indices), 3))
 
-		mesh_fn = mesh_data.maya_mesh_fn
-		vertex_normals = []
-
-		for index in vertex_indices:
-			normal = om.MVector()
-			mesh_fn.getVertexNormal(index, False, normal, om.MSpace.kWorld)
-			vertex_normals.append(
-				np.array([normal.x, normal.y, normal.z], dtype=np.float32)
-			)
-
-		return np.array(vertex_normals)
+		return mesh_data.normals[vertex_indices]

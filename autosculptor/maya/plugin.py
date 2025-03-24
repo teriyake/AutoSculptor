@@ -2,11 +2,13 @@ import sys
 import os
 from autosculptor.utils.utils import Utils
 from autosculptor.maya.test_ui import TestUI
+from autosculptor.maya.viewport_drawer import SuggestionDrawer
 
 try:
 	import maya.cmds as cmds
 	import maya.OpenMayaMPx as OpenMayaMPx
 	import maya.OpenMaya as om
+	import maya.api.OpenMayaRender as omr
 except ImportError:
 	print("Maya modules not available. Running in standalone mode.")
 
@@ -213,6 +215,23 @@ class AutoSculptorTestCmd(OpenMayaMPx.MPxCommand):
 		om.MGlobal.displayInfo("AutoSculptor test completed successfully!")
 
 
+class AutoSculptorDrawNode(OpenMayaMPx.MPxLocatorNode):
+	"""Dummy node to host the draw override."""
+
+	id = om.MTypeId(0x8724)
+
+	def __init__(self):
+		OpenMayaMPx.MPxLocatorNode.__init__(self)
+
+	@classmethod
+	def creator(cls):
+		return OpenMayaMPx.asMPxPtr(cls())
+
+	@classmethod
+	def initialize(cls):
+		pass
+
+
 def initializePlugin(mobject):
 	mplugin = OpenMayaMPx.MFnPlugin(mobject, "AutoSculptor", "1.0", "Any")
 	try:
@@ -221,9 +240,25 @@ def initializePlugin(mobject):
 			AutoSculptorTestCmd.cmdCreator,
 			AutoSculptorTestCmd.syntaxCreator,
 		)
-		om.MGlobal.displayInfo("AutoSculptor plugin loaded successfully!")
-	except:
-		sys.stderr.write("Failed to register command: autoSculptorTest\n")
+
+		mplugin.registerNode(
+			"autoSculptorDrawOverride",
+			AutoSculptorDrawNode.id,
+			AutoSculptorDrawNode.creator,
+			AutoSculptorDrawNode.initialize,
+			OpenMayaMPx.MPxNode.kLocatorNode,
+		)
+		omr.MDrawRegistry.registerDrawOverrideCreator(
+			SuggestionDrawer.drawDBClassification,
+			"autoSculptorDrawOverride",
+			SuggestionDrawer.creator,
+		)
+
+		om.MGlobal.displayInfo(
+			"AutoSculptor plugin loaded, command and draw override registered!"
+		)
+	except Exception as e:
+		sys.stderr.write(f"Failed to register command or draw override: {e}\n")
 		# raise
 
 
@@ -231,7 +266,12 @@ def uninitializePlugin(mobject):
 	mplugin = OpenMayaMPx.MFnPlugin(mobject)
 	try:
 		mplugin.deregisterCommand(AutoSculptorTestCmd.kPluginCmdName)
-		om.MGlobal.displayInfo("AutoSculptor plugin unloaded successfully!")
-	except:
-		sys.stderr.write("Failed to unregister command: autoSculptorTest\n")
+		omr.MDrawRegistry.deregisterDrawOverrideCreator(
+			SuggestionDrawer.drawDBClassification, SuggestionDrawer.drawRegistrantId
+		)
+		om.MGlobal.displayInfo(
+			"AutoSculptor plugin unloaded, command and draw override deregistered!"
+		)
+	except Exception as e:
+		sys.stderr.write(f"Failed to deregister command or draw override: {e}\n")
 		# raise

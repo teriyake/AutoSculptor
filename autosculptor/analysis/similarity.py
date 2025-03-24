@@ -32,9 +32,9 @@ def calculate_sample_differential(
 	"""
 
 	if stroke_type == "surface":
-		print(
-			f"  Sample 1: ts={sample1.ts:.3f}, ds={sample1.ds:.3f}, Sample 2: ts={sample2.ts:.3f}, ds={sample2.ds:.3f}"
-		)
+		# print(
+		# f"  Sample 1: ts={sample1.ts:.3f}, ds={sample1.ds:.3f}, Sample 2: ts={sample2.ts:.3f}, ds={sample2.ds:.3f}"
+		# )
 		p_diff = np.array([sample1.ts - sample2.ts, sample1.ds - sample2.ds])
 	elif stroke_type == "freeform":
 		p_diff = np.array(
@@ -49,7 +49,7 @@ def calculate_sample_differential(
 	t_diff = np.array([sample1.timestamp - sample2.timestamp])
 	diff = np.array([wp * p_diff, wa * a_diff, wt * t_diff], dtype=object)
 
-	print(f"Sample Differential - p_diff: {p_diff}, a_diff: {a_diff}, t_diff: {t_diff}")
+	# print(f"Sample Differential - p_diff: {p_diff}, a_diff: {a_diff}, t_diff: {t_diff}")
 
 	return diff
 
@@ -86,7 +86,7 @@ def calculate_stroke_neighborhood_distance(
 			)
 			flat_diff = np.concatenate([x.flatten() for x in diff])
 			cost_matrix[i, j] = np.linalg.norm(flat_diff)
-			print(f"Cost Matrix[{i},{j}]: {cost_matrix[i,j]}, Flat Diff: {flat_diff}")
+			# print(f"Cost Matrix[{i},{j}]: {cost_matrix[i,j]}, Flat Diff: {flat_diff}")
 
 	row_ind, col_ind = linear_sum_assignment(cost_matrix)
 	total_distance = cost_matrix[row_ind, col_ind].sum()
