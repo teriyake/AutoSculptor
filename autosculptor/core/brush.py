@@ -23,10 +23,10 @@ class Brush(ABC):
 		Initialize a brush.
 
 		Args:
-		    size (float): Size/radius of the brush
-		    strength (float): Intensity of the brush effect
-		    mode (BrushMode): Operation mode (ADD, SUBTRACT, SMOOTH)
-		    falloff (str): Falloff type ('smooth', 'linear', 'constant')
+			size (float): Size/radius of the brush
+			strength (float): Intensity of the brush effect
+			mode (BrushMode): Operation mode (ADD, SUBTRACT, SMOOTH)
+			falloff (str): Falloff type ('smooth', 'linear', 'constant')
 		"""
 		self.size = size
 		self.strength = strength
@@ -39,8 +39,14 @@ class Brush(ABC):
 		Begin a new stroke and return it.
 
 		Returns:
-		    Stroke: The newly created stroke
+			Stroke: The newly created stroke
 		"""
+		new_stroke = Stroke()
+		new_stroke.brush_size = self.size
+		new_stroke.brush_strength = self.strength
+		new_stroke.brush_mode = self.mode
+		new_stroke.brush_falloff = self.falloff
+
 		self.current_stroke = Stroke()
 		return self.current_stroke
 
@@ -49,7 +55,7 @@ class Brush(ABC):
 		End the current stroke and return it.
 
 		Returns:
-		    Stroke: The completed stroke
+			Stroke: The completed stroke
 		"""
 		stroke = self.current_stroke
 		self.current_stroke = None
@@ -60,10 +66,10 @@ class Brush(ABC):
 		Calculate the falloff value based on the distance from brush center.
 
 		Args:
-		    distance (float): Distance from the brush center
+			distance (float): Distance from the brush center
 
 		Returns:
-		    float: Falloff value between 0 and 1
+			float: Falloff value between 0 and 1
 		"""
 		normalized_dist = min(distance / self.size, 1.0)
 
@@ -79,10 +85,10 @@ class Brush(ABC):
 		Get the displacement vector based on the brush mode.
 
 		Args:
-		    normal (np.ndarray): Surface normal at the point
+			normal (np.ndarray): Surface normal at the point
 
 		Returns:
-		    np.ndarray: Vector to displace the vertex
+			np.ndarray: Vector to displace the vertex
 		"""
 		if self.mode == BrushMode.ADD:
 			return normal
@@ -97,13 +103,13 @@ class Brush(ABC):
 		Add a sample to the current stroke.
 
 		Args:
-		    position: 3D position of the sample
-		    normal: Surface normal at the position
-		    pressure: Pressure applied at this sample
-		    timestamp: Time when this sample was created
+			position: 3D position of the sample
+			normal: Surface normal at the position
+			pressure: Pressure applied at this sample
+			timestamp: Time when this sample was created
 
 		Returns:
-		    Sample: The created sample
+			Sample: The created sample
 		"""
 		pass
 
@@ -113,10 +119,10 @@ class Brush(ABC):
 		Apply the brush effect to a mesh at a given sample.
 
 		Args:
-		    mesh: The mesh to modify
-		    sample: The sample to apply
+			mesh: The mesh to modify
+			sample: The sample to apply
 
 		Returns:
-		    bool: True if the mesh was modified
+			bool: True if the mesh was modified
 		"""
 		pass

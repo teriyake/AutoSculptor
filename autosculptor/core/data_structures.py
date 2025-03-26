@@ -2,7 +2,10 @@
 Core data structures
 """
 
+from typing import Optional
 import numpy as np
+
+# from autosculptor.core.brush import BrushMode
 
 
 class Sample:
@@ -18,11 +21,11 @@ class Sample:
 		Initialize a new Sample.
 
 		Args:
-		    position (np.ndarray): 3D position of the sample
-		    normal (np.ndarray, optional): Surface normal at the sample position
-		    size (float, optional): Size of the brush at this sample
-		    pressure (float, optional): Pressure applied at this sample
-		    timestamp (float, optional): Time when this sample was created
+			position (np.ndarray): 3D position of the sample
+			normal (np.ndarray, optional): Surface normal at the sample position
+			size (float, optional): Size of the brush at this sample
+			pressure (float, optional): Pressure applied at this sample
+			timestamp (float, optional): Time when this sample was created
 		"""
 		self.position = np.array(position, dtype=np.float32)
 		self.normal = (
@@ -60,12 +63,18 @@ class Stroke:
 		self.start_time = None
 		self.end_time = None
 
+		# Brush properties
+		self.brush_size: Optional[float] = None
+		self.brush_strength: Optional[float] = None
+		self.brush_mode: Optional[str] = None
+		self.brush_falloff: Optional[str] = None
+
 	def add_sample(self, sample):
 		"""
 		Add a sample to the stroke.
 
 		Args:
-		    sample (Sample): The sample to add
+			sample (Sample): The sample to add
 		"""
 		if self.start_time is None:
 			self.start_time = sample.timestamp
@@ -78,7 +87,7 @@ class Stroke:
 		Get all samples in the stroke.
 
 		Returns:
-		    list: List of Sample objects
+			list: List of Sample objects
 		"""
 		return self.samples
 
@@ -104,7 +113,7 @@ class Workflow:
 		Add a stroke to the workflow.
 
 		Args:
-		    stroke (Stroke): The stroke to add
+			stroke (Stroke): The stroke to add
 		"""
 		self.strokes.append(stroke)
 
@@ -113,7 +122,7 @@ class Workflow:
 		Get all strokes in the workflow.
 
 		Returns:
-		    list: List of Stroke objects
+			list: List of Stroke objects
 		"""
 		return self.strokes
 
