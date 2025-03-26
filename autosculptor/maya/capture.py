@@ -25,6 +25,7 @@ class SculptCapture:
 		self.update_history_callback = update_history_callback
 		self.update_suggestion_callback = update_suggestion_callback
 		self.is_capturing = False
+		self.suggestions_enabled = False
 
 	def get_world_space_positions(self, mesh_name):
 		"""Gets world-space vertex positions for a mesh by name."""
@@ -121,6 +122,7 @@ class SculptCapture:
 			if normals is None:
 				return
 
+			# TODO: We may want to do something else here (i.e., do not use moved vertices as samples points of the captured stroke)
 			moved_indices = [
 				i
 				for i in range(len(current_points))
@@ -145,32 +147,63 @@ class SculptCapture:
 			if len(current_stroke) > 0:
 				mesh_data = MeshInterface.get_mesh_data(self.mesh_name)
 				if not mesh_data:
+					self.previous_positions[self.mesh_name] = current_points
 					return
 
 				parameterizer = StrokeParameterizer(mesh_data)
-				parameterizer.parameterize_stroke(current_stroke, [0, 0, 1])
+				# TODO: Get camera view vector from Maya (tho it shouldn't matter for surface strokes)
+				camera_lookat = [0, 0, 1]
+				parameterizer.parameterize_stroke(current_stroke, camera_lookat)
 				self.current_workflow.add_stroke(current_stroke)
+
 				if self.update_history_callback:
-					print("SculptCapture: update_history_callback exists")
 					self.update_history_callback(self.copy_workflow())
 				else:
 					print("SculptCapture: update_history_callback does not exist!!!")
 
+				if self.suggestions_enabled and len(self.current_workflow.strokes) > 1:
+					print("SculptCapture: Generating suggestions...")
+					self.generate_suggestions()
+				elif self.suggestions_enabled:
+					print(
+						"SculptCapture: Suggestions enabled, but not enough history yet."
+					)
+				else:
+					self.clear_suggestions()
+
 			self.previous_positions[self.mesh_name] = current_points
 
-			if len(self.current_workflow.strokes) > 1:
-				self.generate_suggestions()
+			for viz in self.suggestion_visualizers:
+				viz.clear()
+			self.suggestion_visualizers.clear()
 
-			if len(self.current_suggestions) > 0:
-				for current_suggestion in self.current_suggestions:
-					visualizer = StrokeVisualizer(current_suggestion)
-					visualizer.visualize(0.2, 8)
+			if self.suggestions_enabled and self.current_suggestions:
+				print(f"Visualizing {len(self.current_suggestions)} suggestions.")
+				for suggestion_stroke in self.current_suggestions:
+					if suggestion_stroke and len(suggestion_stroke.samples) > 0:
+						try:
+							visualizer = StrokeVisualizer(suggestion_stroke)
+							viz_radius = (
+								suggestion_stroke.samples[0].size
+								if suggestion_stroke.samples
+								else 0.1
+							)
+							visualizer.visualize(0.2, 8)
+							self.suggestion_visualizers.append(visualizer)
+						except Exception as viz_e:
+							print(
+								f"SculptCapture: Error visualizing suggestion: {viz_e}"
+							)
 
 		except Exception as e:
 			print(f"Error in process_mesh_changes: {e}")
 			import traceback
 
 			traceback.print_exc()
+			if self.mesh_name in self.previous_positions:
+				self.previous_positions[
+					self.mesh_name
+				] = self.get_world_space_positions(self.mesh_name)
 
 	def get_selected_mesh_name(self):
 		"""Gets the full path of the selected mesh shape node."""
@@ -197,7 +230,7 @@ class SculptCapture:
 	def generate_suggestions(self):
 		"""Generate autocomplete suggestions using StrokeSynthesizer"""
 		if not self.mesh_name or not cmds.objExists(self.mesh_name):
-			print("Mesh no longer exists, clearing reference")
+			print("SculptCapture: Mesh no longer exists, clearing reference")
 			self.mesh_name = None
 			return
 
@@ -214,10 +247,12 @@ class SculptCapture:
 			)
 			if suggestion:
 				self.current_suggestions = [suggestion]
-				print(f"Suggestion generated: {len(suggestion.samples)} samples")
+				print(
+					f"SculptCapture: Suggestion generated: {len(suggestion.samples)} samples"
+				)
 			else:
 				self.current_suggestions = []
-				print("No suitable suggestion found.")
+				print("SculptCapture: No suitable suggestion found.")
 
 			if self.update_suggestion_callback:
 				suggestion_workflow = Workflow()
@@ -226,7 +261,7 @@ class SculptCapture:
 				self.update_suggestion_callback(suggestion_workflow)
 
 		except Exception as e:
-			print(f"Error in generate_suggestions: {str(e)}")
+			print(f"SculptCapture: Error in generate_suggestions: {str(e)}")
 			import traceback
 
 			traceback.print_exc()
@@ -241,8 +276,8 @@ class SculptCapture:
 
 	def start_capture(self):
 		if self.script_job_number is not None:
-			print("Capture already running.")
 			return
+
 		if not self.mesh_name:
 			print("Cannot start capture: No mesh selected.")
 
@@ -253,15 +288,10 @@ class SculptCapture:
 				)
 				return
 			self.mesh_name = selected
-			print(f"Using selected mesh: {self.mesh_name}")
 
 		self.previous_positions[self.mesh_name] = self.get_world_space_positions(
 			self.mesh_name
 		)
-		if self.previous_positions[self.mesh_name] is None:
-			print(
-				f"Warning: Could not get initial positions for {self.mesh_name}. Capture might be unreliable."
-			)
 
 		self.script_job_number = cmds.scriptJob(
 			event=["idle", self.process_mesh_changes],
@@ -269,7 +299,7 @@ class SculptCapture:
 		)
 		self.is_capturing = True
 		print(
-			f"Capture started. Registered script job: {self.script_job_number} for mesh: {self.mesh_name}"
+			f"SculptCapture: Capture started. Registered script job: {self.script_job_number} for mesh: {self.mesh_name}"
 		)
 
 	def stop_capture(self):
@@ -318,7 +348,46 @@ class SculptCapture:
 			print("No script job to unregister.")
 
 	def clear_suggestions(self):
-		"""Clears the current suggestion strokes."""
+		"""Clears the current suggestion strokes and updates the UI."""
+		if self.current_suggestions:
+			print("SculptCapture: Clearing suggestions.")
 		self.current_suggestions = []
+
 		if self.update_suggestion_callback:
 			self.update_suggestion_callback(Workflow())
+
+		for viz in self.suggestion_visualizers:
+			viz.clear()
+		self.suggestion_visualizers.clear()
+
+	def delete_stroke(self, stroke_index):
+		if 0 <= stroke_index < len(self.current_workflow):
+			del self.current_workflow.strokes[stroke_index]
+			print(f"SculptCapture: Deleted stroke at index {stroke_index}")
+
+			if self.update_history_callback:
+				self.update_history_callback(self.copy_workflow())
+
+			if self.suggestions_enabled:
+				print("SculptCapture: Regenerating suggestions after deletion...")
+				self.generate_suggestions()
+			else:
+				self.clear_suggestions()
+		else:
+			print(f"WARNING: Invalid stroke index for deletion: {stroke_index}")
+
+	def set_suggestions_enabled(self, enabled: bool):
+		self.suggestions_enabled = enabled
+		if not enabled:
+			self.clear_suggestions()
+
+			for viz in self.suggestion_visualizers:
+				viz.clear()
+			self.suggestion_visualizers.clear()
+		elif enabled and self.is_capturing and len(self.current_workflow.strokes) > 0:
+			self.generate_suggestions()
+
+	def cleanup(self):
+		self.stop_capture()
+		self.clear_suggestions()
+		print("SculptCapture cleaned up.")

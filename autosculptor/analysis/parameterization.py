@@ -165,7 +165,6 @@ class StrokeParameterizer:
 
 		self.normalize_stroke_parameters(stroke)
 
-	
 	def inverse_parameterize_surface(
 		self, stroke: Stroke, ts: float, ds: float, original_sample: Sample
 	) -> Tuple[np.ndarray, np.ndarray]:

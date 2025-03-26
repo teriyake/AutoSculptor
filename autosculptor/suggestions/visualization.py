@@ -12,6 +12,8 @@ class StrokeVisualizer:
 			stroke (Stroke): The stroke to visualize.
 		"""
 		self.stroke = stroke
+		# Track all nodes created by this instance so that we can free up resources later
+		self.created_nodes = []
 
 		# Create a new shader for visualization
 		self.shader = cmds.shadingNode(
@@ -20,6 +22,8 @@ class StrokeVisualizer:
 		self.shading_group = cmds.sets(
 			renderable=True, noSurfaceShader=True, empty=True, name=self.shader + "SG"
 		)
+		# SG needs to be cleaned up
+		self.created_nodes.append(self.shading_group)
 		cmds.connectAttr(
 			self.shader + ".outColor", self.shading_group + ".surfaceShader"
 		)
@@ -72,6 +76,9 @@ class StrokeVisualizer:
 		tube = cmds.extrude(
 			circle, curve, et=2, fixedPath=True, useComponentPivot=1, polygon=1, ch=True
 		)[0]
+
+		# Make sure the extruded tube will be deleted later
+		self.created_nodes.append(tube)
 
 		# Cap the ends of the tube
 		cmds.polyCloseBorder(tube)
@@ -130,6 +137,25 @@ class StrokeVisualizer:
 			cmds.select(clear=True)
 
 		return tube
+
+	def clear(self):
+		"""
+		Deletes the geometry and shaders created by this visualizer instance.
+		"""
+		print(f"StrokeVisualizer: Clearing nodes for instance {id(self)}...")
+		nodes_to_delete = []
+		for node_name in self.created_nodes:
+			if node_name and cmds.objExists(node_name):
+				nodes_to_delete.append(node_name)
+
+		if nodes_to_delete:
+			try:
+				cmds.delete(nodes_to_delete)
+			except Exception as e:
+				print(f"StrokeVisualizer: Error deleting nodes: {e}")
+
+		self.created_nodes = []
+		print(f"StrokeVisualizer: Clearing complete for instance {id(self)}.")
 
 
 def test_stroke_visualizer():

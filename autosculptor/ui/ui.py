@@ -18,19 +18,25 @@ from PySide2.QtCore import Qt
 import maya.OpenMayaUI as omui
 from shiboken2 import wrapInstance
 import maya.cmds as cmds
+import numpy as np
 
 from autosculptor.core.data_structures import Sample, Stroke, Workflow
-from autosculptor.core.brush import Brush
+from autosculptor.core.brush import Brush, BrushMode
+from autosculptor.maya.capture import SculptCapture
+
 
 def get_maya_main_window():
 	main_window_ptr = omui.MQtUtil.mainWindow()
 	return wrapInstance(int(main_window_ptr), QDialog)
 
+
 def generate_random_sample():
 	"""
 	Generate a random Sample instance with random attributes.
 	"""
-	position = np.random.uniform(-10, 10, 3)  # Random 3D position within [-10, 10] range
+	position = np.random.uniform(
+		-10, 10, 3
+	)  # Random 3D position within [-10, 10] range
 	normal = np.random.randn(3)  # Random normal vector
 	normal /= np.linalg.norm(normal)  # Normalize to unit vector
 	size = np.random.uniform(0.1, 5.0)  # Random size between 0.1 and 5.0
@@ -40,17 +46,23 @@ def generate_random_sample():
 
 	return Sample(position, normal, size, pressure, timestamp, curvature)
 
+
 def generate_random_stroke(num_samples):
 	"""
 	Generate a Stroke with a specified number of random Sample instances.
 	"""
 	stroke = Stroke()
-	stroke.stroke_type = np.random.choice(["freeform", "surface"])
-	stroke.brush = Brush(np.random.uniform(0.1, 5.0), np.random.uniform(0.1, 1.0))
+	stroke.brush_size = np.random.uniform(0.1, 5.0)
+	stroke.brush_strength = np.random.uniform(0.1, 1.0)
+	stroke.brush_mode = np.random.choice(["ADD", "SUBTRACT", "SMOOTH"])
+	stroke.brush_falloff = np.random.choice(["smooth", "linear", "constant"])
+	stroke.stroke_type = np.random.choice(["surface", "freeform"])
+
 	for _ in range(num_samples):
 		sample = generate_random_sample()
 		stroke.add_sample(sample)
 	return stroke
+
 
 def generate_random_workflow(num_strokes):
 	"""
@@ -64,8 +76,9 @@ def generate_random_workflow(num_strokes):
 
 
 class SculptingPanel(QWidget):
-	def __init__(self, parent=None):
+	def __init__(self, main_window_ref, parent=None):
 		super().__init__(parent)
+		self.main_window = main_window_ref
 		layout = QVBoxLayout()
 
 		# Mesh Selection
@@ -94,6 +107,8 @@ class SculptingPanel(QWidget):
 		self.stroke_list.itemSelectionChanged.connect(self.on_stroke_selection_changed)
 		stroke_layout.addWidget(self.stroke_list)
 		self.delete_stroke_btn = QPushButton("Delete Stroke")
+		self.delete_stroke_btn.clicked.connect(self.on_delete_stroke)
+		self.delete_stroke_btn.setEnabled(False)
 		stroke_layout.addWidget(self.delete_stroke_btn)
 		stroke_group.setLayout(stroke_layout)
 		layout.addWidget(stroke_group)
@@ -122,10 +137,10 @@ class SculptingPanel(QWidget):
 		layout.addWidget(sample_group)
 
 		self.setLayout(layout)
-		
+
 		self.workflow = None
-		#self.update(generate_random_workflow(5))
-			
+		# self.update(generate_random_workflow(5))
+
 	def update(self, workflow):
 		"""
 		Update the stroke list with provided workflow.
@@ -136,13 +151,28 @@ class SculptingPanel(QWidget):
 			row_position = self.stroke_list.rowCount()
 			self.stroke_list.insertRow(row_position)
 			# Columns: ["Type", "Mode", "SmpCount", "Size", "Strength"]
-			self.stroke_list.setItem(row_position, 0, QTableWidgetItem(stroke.stroke_type))
-			self.stroke_list.setItem(row_position, 1, QTableWidgetItem(stroke.brush.mode.name))
-			self.stroke_list.setItem(row_position, 2, QTableWidgetItem(str(len(stroke.samples))))
-			self.stroke_list.setItem(row_position, 3, QTableWidgetItem(str(stroke.brush.size)))
-			self.stroke_list.setItem(row_position, 4, QTableWidgetItem(str(stroke.brush.strength)))
+			self.stroke_list.setItem(
+				row_position, 0, QTableWidgetItem(stroke.stroke_type)
+			)
+			self.stroke_list.setItem(
+				row_position, 1, QTableWidgetItem(stroke.brush_mode)
+			)
+			self.stroke_list.setItem(
+				row_position, 2, QTableWidgetItem(str(len(stroke.samples)))
+			)
+			self.stroke_list.setItem(
+				row_position, 3, QTableWidgetItem(str(stroke.brush_size))
+			)
+			self.stroke_list.setItem(
+				row_position, 4, QTableWidgetItem(str(stroke.brush_strength))
+			)
 		self.workflow = workflow
-		
+
+		if len(self.workflow.strokes) > 0:
+			self.delete_stroke_btn.setEnabled(True)
+		else:
+			self.delete_stroke_btn.setEnabled(False)
+
 	def update_sample_list(self, stroke):
 		"""
 		Update the sample list with provided stroke.
@@ -153,21 +183,123 @@ class SculptingPanel(QWidget):
 			row_position = self.sample_list.rowCount()
 			self.sample_list.insertRow(row_position)
 			# Columns: ["Position", "Normal", "Size", "Pressure", "Timestamp"]
-			self.sample_list.setItem(row_position, 0, QTableWidgetItem(str(smp.position)))
+			self.sample_list.setItem(
+				row_position, 0, QTableWidgetItem(str(smp.position))
+			)
 			self.sample_list.setItem(row_position, 1, QTableWidgetItem(str(smp.normal)))
 			self.sample_list.setItem(row_position, 2, QTableWidgetItem(str(smp.size)))
-			self.sample_list.setItem(row_position, 3, QTableWidgetItem(str(smp.pressure)))
-			self.sample_list.setItem(row_position, 4, QTableWidgetItem(str(smp.timestamp)))
-			
+			self.sample_list.setItem(
+				row_position, 3, QTableWidgetItem(str(smp.pressure))
+			)
+			self.sample_list.setItem(
+				row_position, 4, QTableWidgetItem(str(smp.timestamp))
+			)
+
 	def on_select_mesh(self):
-		self.mesh_name_label.setText("Mesh Name--")
-	
+		if self.main_window and self.main_window.sculpt_capture:
+			sculpt_capture = self.main_window.sculpt_capture
+			mesh_name = sculpt_capture.get_selected_mesh_name()
+			if mesh_name:
+				if sculpt_capture.mesh_name != mesh_name:
+					print(f"SculptingPanel: Mesh selected - {mesh_name}")
+					sculpt_capture.mesh_name = mesh_name
+
+					sculpt_capture.previous_positions = {}
+					sculpt_capture.previous_positions[
+						mesh_name
+					] = sculpt_capture.get_world_space_positions(mesh_name)
+					# self.main_window.sculpt_capture.current_workflow = Workflow()
+					# self.update(Workflow())
+					self.mesh_name_label.setText(
+						f"Selected Mesh: {mesh_name.split('|')[-1]}"
+					)
+				else:
+					print(f"SculptingPanel: Mesh already selected - {mesh_name}")
+					self.mesh_name_label.setText(
+						f"Selected Mesh: {mesh_name.split('|')[-1]}"
+					)
+			else:
+				sculpt_capture.mesh_name = None
+				self.mesh_name_label.setText("Selected Mesh: None")
+				print("SculptingPanel: No valid mesh selected.")
+		else:
+			try:
+				sel = cmds.ls(sl=1, type="mesh", l=True) or cmds.ls(
+					sl=1, dag=1, type="transform", l=True
+				)
+				if sel:
+					shapes = cmds.listRelatives(sel[0], s=1, type="mesh", f=1) or (
+						[sel[0]] if cmds.nodeType(sel[0]) == "mesh" else []
+					)
+					if shapes:
+						self.mesh_name_label.setText(
+							f"Selected Mesh: {shapes[0].split('|')[-1]}"
+						)
+						print(
+							f"SculptingPanel: Mesh {shapes[0]} selected (capture inactive)."
+						)
+					else:
+						self.mesh_name_label.setText("Selected Mesh: None (Invalid)")
+						print(
+							"SculptingPanel: Selection is not a mesh (capture inactive)."
+						)
+				else:
+					self.mesh_name_label.setText("Selected Mesh: None")
+					print("SculptingPanel: Nothing selected (capture inactive).")
+			except Exception as e:
+				print(f"SculptingPanel: Error checking selection: {e}")
+				self.mesh_name_label.setText("Selected Mesh: Error")
+
 	def on_enable_capture_changed(self, state):
-		if state == Qt.Checked:
-			print("Checkbox is checked")
-		elif state == Qt.Unchecked:
-			print("Checkbox is unchecked")
-			
+		if self.main_window:
+			if state == Qt.Checked:
+				if not self.main_window.sculpt_capture:
+					print("SculptingPanel: Enabling capture...")
+
+					self.main_window.sculpt_capture = SculptCapture(
+						update_history_callback=self.update,
+						update_suggestion_callback=self.main_window.suggestion_tab.update,
+					)
+
+					if not self.main_window.sculpt_capture.mesh_name:
+						self.on_select_mesh()
+					if self.main_window.sculpt_capture.mesh_name:
+						self.main_window.sculpt_capture.start_capture()
+						self.mesh_button.setEnabled(False)
+					else:
+						print("SculptingPanel: Cannot start capture, no mesh selected.")
+						self.enable_capture.setChecked(False)
+				else:
+					print("SculptingPanel: Capture already enabled.")
+			else:
+				if self.main_window.sculpt_capture:
+					print("SculptingPanel: Disabling capture...")
+					self.main_window.sculpt_capture.stop_capture()
+					# self.update(Workflow())
+					# self.main_window.suggestion_tab.update(Workflow())
+					self.mesh_button.setEnabled(True)
+				else:
+					print("SculptingPanel: Capture already disabled.")
+
+	def on_delete_stroke(self):
+		selected_indices = self.stroke_list.selectedIndexes()
+		if selected_indices:
+			print(f"Selected index: {selected_indices[0].row()}")
+
+		original_index = selected_indices[0].row()
+
+		if self.main_window and self.main_window.sculpt_capture:
+			if (
+				0
+				<= original_index
+				< len(self.main_window.sculpt_capture.current_workflow.strokes)
+			):
+				self.main_window.sculpt_capture.delete_stroke(original_index)
+			else:
+				print(
+					f"Error: Cannot delete stroke, invalid original index {original_index}"
+				)
+
 	def on_stroke_selection_changed(self):
 		"""
 		Handle the event when the stroke selection changes.
@@ -180,14 +312,26 @@ class SculptingPanel(QWidget):
 
 	def select(self, index):
 		pass
-   
-   
+
+	def cleanup(self):
+		"""Clean up resources."""
+		print("SculptingPanel cleanup: Disconnecting signals.")
+
+		self.mesh_button.clicked.disconnect(self.on_select_mesh)
+		self.enable_capture.stateChanged.disconnect(self.on_enable_capture_changed)
+		self.stroke_list.itemSelectionChanged.disconnect(
+			self.on_stroke_selection_changed
+		)
+		self.delete_stroke_btn.clicked.disconnect(self.on_delete_stroke)
+
+		# TODO: Make sure to disconnect other signals here if we connect them later
 
 
 class SuggestionPanel(QWidget):
-	def __init__(self, parent=None):
+	def __init__(self, main_window_ref, parent=None):
 		super().__init__(parent)
 		layout = QVBoxLayout()
+		self.main_window = main_window_ref
 
 		# Prediction Frame
 		prediction_group = QGroupBox("Prediction")
@@ -196,6 +340,7 @@ class SuggestionPanel(QWidget):
 		checkbox_layout = QHBoxLayout()
 		self.enable_prediction = QCheckBox("Enable Prediction")
 		self.preview_prediction = QCheckBox("Preview Selected Prediction")
+		self.enable_prediction.stateChanged.connect(self.on_enable_prediction_changed)
 		checkbox_layout.addWidget(self.enable_prediction)
 		checkbox_layout.addWidget(self.preview_prediction)
 		prediction_layout.addLayout(checkbox_layout)
@@ -251,9 +396,9 @@ class SuggestionPanel(QWidget):
 
 		layout.addLayout(button_layout)
 		self.setLayout(layout)
-		
+
 		self.workflow = None
-		#self.update(generate_random_workflow(5))
+		# self.update(generate_random_workflow(5))
 
 	def update(self, workflow):
 		"""
@@ -265,13 +410,23 @@ class SuggestionPanel(QWidget):
 			row_position = self.stroke_list.rowCount()
 			self.stroke_list.insertRow(row_position)
 			# Columns: ["Type", "Mode", "SmpCount", "Size", "Strength"]
-			self.stroke_list.setItem(row_position, 0, QTableWidgetItem(stroke.stroke_type))
-			self.stroke_list.setItem(row_position, 1, QTableWidgetItem(stroke.brush.mode.name))
-			self.stroke_list.setItem(row_position, 2, QTableWidgetItem(str(len(stroke.samples))))
-			self.stroke_list.setItem(row_position, 3, QTableWidgetItem(str(stroke.brush.size)))
-			self.stroke_list.setItem(row_position, 4, QTableWidgetItem(str(stroke.brush.strength)))
+			self.stroke_list.setItem(
+				row_position, 0, QTableWidgetItem(stroke.stroke_type)
+			)
+			self.stroke_list.setItem(
+				row_position, 1, QTableWidgetItem(stroke.brush_mode)
+			)
+			self.stroke_list.setItem(
+				row_position, 2, QTableWidgetItem(str(len(stroke.samples)))
+			)
+			self.stroke_list.setItem(
+				row_position, 3, QTableWidgetItem(str(stroke.brush_size))
+			)
+			self.stroke_list.setItem(
+				row_position, 4, QTableWidgetItem(str(stroke.brush_strength))
+			)
 		self.workflow = workflow
-		
+
 	def update_sample_list(self, stroke):
 		"""
 		Update the sample list with provided stroke.
@@ -282,12 +437,18 @@ class SuggestionPanel(QWidget):
 			row_position = self.sample_list.rowCount()
 			self.sample_list.insertRow(row_position)
 			# Columns: ["Position", "Normal", "Size", "Pressure", "Timestamp"]
-			self.sample_list.setItem(row_position, 0, QTableWidgetItem(str(smp.position)))
+			self.sample_list.setItem(
+				row_position, 0, QTableWidgetItem(str(smp.position))
+			)
 			self.sample_list.setItem(row_position, 1, QTableWidgetItem(str(smp.normal)))
 			self.sample_list.setItem(row_position, 2, QTableWidgetItem(str(smp.size)))
-			self.sample_list.setItem(row_position, 3, QTableWidgetItem(str(smp.pressure)))
-			self.sample_list.setItem(row_position, 4, QTableWidgetItem(str(smp.timestamp)))
-			
+			self.sample_list.setItem(
+				row_position, 3, QTableWidgetItem(str(smp.pressure))
+			)
+			self.sample_list.setItem(
+				row_position, 4, QTableWidgetItem(str(smp.timestamp))
+			)
+
 	def on_stroke_selection_changed(self):
 		"""
 		Handle the event when the stroke selection changes.
@@ -298,18 +459,74 @@ class SuggestionPanel(QWidget):
 			print(selected_indexes[0].row())
 			self.update_sample_list(self.workflow.strokes[selected_indexes[0].row()])
 
+	def on_enable_prediction_changed(self, state):
+		is_enabled = state == Qt.Checked
+		print(f"SuggestionPanel: Enable Prediction changed to: {is_enabled}")
+		self.recompute_btn.setEnabled(is_enabled)
+
+		if self.main_window and self.main_window.sculpt_capture:
+			self.main_window.sculpt_capture.set_suggestions_enabled(is_enabled)
+		elif is_enabled:
+			print(
+				"SuggestionPanel: Capture instance doesn't exist yet. Suggestions will generate once capture starts."
+			)
+
+		self.on_stroke_selection_changed()
+
+	def on_recompute_clicked(self):
+		print("SuggestionPanel: Force Recompute clicked.")
+		if self.main_window and self.main_window.sculpt_capture:
+			sc = self.main_window.sculpt_capture
+			if sc.is_capturing and sc.suggestions_enabled:
+				if len(sc.current_workflow.strokes) > 1:
+					sc.generate_suggestions()
+				else:
+					om2.MGlobal.displayWarning(
+						"Cannot recompute: No stroke history captured yet."
+					)
+					sc.clear_suggestions()
+			elif not sc.is_capturing:
+				om2.MGlobal.displayWarning(
+					"Cannot recompute: History capture is not enabled."
+				)
+			else:
+				om2.MGlobal.displayWarning(
+					"Cannot recompute: Suggestion generation is disabled."
+				)
+				sc.clear_suggestions()
+		else:
+			om2.MGlobal.displayWarning(
+				"Cannot recompute: Capture system not initialized."
+			)
+
+	def cleanup(self):
+		"""Clean up resources."""
+		print("SuggestionPanel cleanup: Disconnecting signals.")
+
+		self.enable_prediction.stateChanged.disconnect(
+			self.on_enable_prediction_changed
+		)
+		self.stroke_list.itemSelectionChanged.disconnect(
+			self.on_stroke_selection_changed
+		)
+		self.recompute_btn.clicked.disconnect(self.on_recompute_clicked)
+
+		# TODO: Make sure to disconnect other signals here if we connect them later
+
 
 class AutoSculptorToolWindow(QDialog):
 	def __init__(self, parent=get_maya_main_window()):
 		super().__init__(parent)
+		self.sculpt_capture = None
+
 		self.setWindowTitle("Sculpting and Suggestion Tool")
 		self.setGeometry(100, 100, 600, 700)
 
 		layout = QVBoxLayout()
 		self.tabs = QTabWidget()
 
-		self.sculpting_tab = SculptingPanel()
-		self.suggestion_tab = SuggestionPanel()
+		self.sculpting_tab = SculptingPanel(self)
+		self.suggestion_tab = SuggestionPanel(self)
 
 		self.tabs.addTab(self.sculpting_tab, "Sculpting History")
 		self.tabs.addTab(self.suggestion_tab, "Sculpting Suggestion")
