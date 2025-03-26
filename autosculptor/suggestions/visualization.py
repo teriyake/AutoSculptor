@@ -9,7 +9,7 @@ class StrokeVisualizer:
 		Initialize the StrokeVisualizer with a Stroke object.
 
 		Args:
-		    stroke (Stroke): The stroke to visualize.
+			stroke (Stroke): The stroke to visualize.
 		"""
 		self.stroke = stroke
 
@@ -35,7 +35,7 @@ class StrokeVisualizer:
 		Create a NURBS curve in Maya from the stroke samples.
 
 		Returns:
-		    str: The name of the created NURBS curve.
+			str: The name of the created NURBS curve.
 		"""
 		# Extract positions from stroke samples
 		positions = [sample.position for sample in self.stroke.samples]
@@ -58,12 +58,12 @@ class StrokeVisualizer:
 		Create a tubular geometry by extruding a circle along the given curve.
 
 		Args:
-		    curve (str): The name of the curve to extrude along.
-		    radius (float, optional): The radius of the tube. Defaults to 0.1.
-		    sections (int, optional): The number of sections for the circle profile. Defaults to 8.
+			curve (str): The name of the curve to extrude along.
+			radius (float, optional): The radius of the tube. Defaults to 0.1.
+			sections (int, optional): The number of sections for the circle profile. Defaults to 8.
 
 		Returns:
-		    str: The name of the created tubular geometry.
+			str: The name of the created tubular geometry.
 		"""
 		# Create a circle to serve as the profile for extrusion
 		circle = cmds.circle(radius=radius, sections=sections, normal=(0, 1, 0))[0]
@@ -89,7 +89,7 @@ class StrokeVisualizer:
 		Assign a transparent yellow material to the specified geometry.
 
 		Args:
-		    geometry (str): The name of the geometry to assign the material to.
+			geometry (str): The name of the geometry to assign the material to.
 		"""
 		# Assign the shader to the geometry
 		cmds.sets(geometry, edit=True, forceElement=self.shading_group)
@@ -99,14 +99,36 @@ class StrokeVisualizer:
 		Visualize the stroke as a tube in Maya.
 
 		Args:
-		    radius (float, optional): The radius of the tube. Defaults to 0.1.
-		    sections (int, optional): The number of sections for the circle profile. Defaults to 8.
+			radius (float, optional): The radius of the tube. Defaults to 0.1.
+			sections (int, optional): The number of sections for the circle profile. Defaults to 8.
 
 		Returns:
-		    str: The name of the created tubular geometry.
+			str: The name of the created tubular geometry.
 		"""
+		# Store the original selection
+		original_selection = cmds.ls(selection=True, long=True) or []
+
 		curve = self.create_curve_from_stroke()
 		tube = self.create_tube_from_curve(curve, radius, sections)
+
+		# Try to restore the selection
+		try:
+			# Make sure the orignal selection still exists
+			valid_original_selection = [
+				item for item in original_selection if cmds.objExists(item)
+			]
+			if valid_original_selection:
+				cmds.select(valid_original_selection, replace=True)
+			else:
+				cmds.select(clear=True)
+				if original_selection:
+					print(
+						"StrokeVisualizer: Original selection no longer exists, clearing selection."
+					)
+		except Exception as e:
+			print(f"StrokeVisualizer: Warning! Failed to restore selection: {e}")
+			cmds.select(clear=True)
+
 		return tube
 
 

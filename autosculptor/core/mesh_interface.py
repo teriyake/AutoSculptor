@@ -180,19 +180,46 @@ class MeshInterface:
 			print("Maya is not available. Cannot find closest point.")
 			return None, None, None
 
-		maya_point = om.MPoint([point[0], point[1], point[2]])
+		try:
+			if not hasattr(point, "__getitem__") or len(point) < 3:
+				raise ValueError(
+					f"Invalid point format passed to find_closest_point: {point}"
+				)
+			maya_point = om.MPoint(point[0], point[1], point[2], 1.0)
+		except Exception as e:
+			print(f"Error creating MPoint from: {point}")
+			raise e
 
 		closest_point = om.MPoint()
 		closest_normal = om.MVector()
-		face_id = om.MScriptUtil().asIntPtr()
+
+		util = om.MScriptUtil()
+		util.createFromInt(0)
+		face_id_ptr = util.asIntPtr()
 
 		mesh_data.maya_mesh_fn.getClosestPoint(
-			maya_point, closest_point, om.MSpace.kWorld, face_id
+			maya_point, closest_point, om.MSpace.kWorld, face_id_ptr
 		)
 
-		face_id_value = om.MScriptUtil.getInt(face_id)
+		face_id_value = util.getInt(face_id_ptr)
 
-		mesh_data.maya_mesh_fn.getFaceVertexNormal(face_id_value, 0, closest_normal)
+		try:
+			if (
+				face_id_value >= 0
+				and face_id_value < mesh_data.maya_mesh_fn.numPolygons()
+			):
+				mesh_data.maya_mesh_fn.getClosestNormal(
+					maya_point, closest_normal, om.MSpace.kWorld
+				)
+			else:
+				print(
+					f"Warning: Invalid face ID {face_id_value} returned by getClosestPoint. Using default normal."
+				)
+				closest_normal = om.MVector(0, 1, 0)
+
+		except Exception as e:
+			print(f"Error getting closest normal for face {face_id_value}: {e}")
+			closest_normal = om.MVector(0, 1, 0)
 
 		closest_point_list = [closest_point.x, closest_point.y, closest_point.z]
 		closest_normal_list = [closest_normal.x, closest_normal.y, closest_normal.z]

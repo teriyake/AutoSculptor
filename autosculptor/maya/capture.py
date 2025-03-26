@@ -82,6 +82,10 @@ class SculptCapture:
 
 		if not self.mesh_name:
 			return
+		if not self.synthesizer is None:
+			self.synthesizer.parameterizer.mesh_data = MeshInterface.get_mesh_data(
+				self.mesh_name
+			)
 
 		tool_name = self.get_active_sculpt_tool()
 		if not tool_name:
@@ -150,8 +154,9 @@ class SculptCapture:
 				self.generate_suggestions()
 
 			if len(self.current_suggestions) > 0:
-				visualizer = StrokeVisualizer(self.current_suggestions)
-				visualizer.visualize(0.2, 8)
+				for current_suggestion in self.current_suggestions:
+					visualizer = StrokeVisualizer(current_suggestion)
+					visualizer.visualize(0.2, 8)
 
 		except Exception as e:
 			print(f"Error in process_mesh_changes: {e}")
@@ -196,9 +201,15 @@ class SculptCapture:
 			if not self.synthesizer:
 				self.synthesizer = StrokeSynthesizer(mesh_data)
 
-			self.current_suggestions = self.synthesizer.synthesize_next_stroke(
+			suggestion = self.synthesizer.synthesize_next_stroke(
 				self.current_workflow, 1.0, 1.0, 10
 			)
+			if suggestion:
+				self.current_suggestions = [suggestion]
+				print(f"Suggestion generated: {len(suggestion.samples)} samples")
+			else:
+				self.current_suggestions = []
+				print("No suitable suggestion found.")
 
 		except Exception as e:
 			print(f"Error in generate_suggestions: {str(e)}")

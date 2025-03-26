@@ -18,16 +18,16 @@ def calculate_sample_neighborhood(
 	Calculate the neighborhood of a sample, considering samples from previous strokes in the workflow.
 
 	Args:
-	    sample: The sample for which to calculate the neighborhood.
-	    current_stroke: The stroke the sample belongs to.
-	    workflow: The entire workflow, including previous strokes.
-	    mesh_data: Mesh data.
-	    geo_calc: Geodesic calculator.
-	    max_spatial_distance: Maximum geodesic distance.
-	    max_temporal_difference: Maximum temporal difference.
+		sample: The sample for which to calculate the neighborhood.
+		current_stroke: The stroke the sample belongs to.
+		workflow: The entire workflow, including previous strokes.
+		mesh_data: Mesh data.
+		geo_calc: Geodesic calculator.
+		max_spatial_distance: Maximum geodesic distance.
+		max_temporal_difference: Maximum temporal difference.
 
 	Returns:
-	    A list of neighboring samples.
+		A list of neighboring samples.
 	"""
 	neighborhood_samples: List[Sample] = []
 
@@ -68,16 +68,21 @@ def calculate_stroke_neighborhoods(
 	Calculate neighborhoods for all samples in a stroke.
 
 	Args:
-	    stroke: The stroke to analyze.
-	    workflow: The entire workflow.
-	    mesh_data: Mesh data.
-	    max_spatial_distance: Maximum geodesic distance.
-	    max_temporal_difference: Maximum temporal difference.
+		stroke: The stroke to analyze.
+		workflow: The entire workflow.
+		mesh_data: Mesh data.
+		max_spatial_distance: Maximum geodesic distance.
+		max_temporal_difference: Maximum temporal difference.
 
 	Returns:
-	    A list of neighborhood samples for each sample in the stroke.
+		A list of neighborhood samples for each sample in the stroke.
 	"""
 	geo_calc = CachedGeodesicCalculator(mesh_data.vertices, mesh_data.faces)
+
+	mesh_diagonal = np.linalg.norm(
+		np.max(mesh_data.vertices, axis=0) - np.min(mesh_data.vertices, axis=0)
+	)
+	max_spatial_distance = mesh_diagonal * 0.15
 
 	neighborhoods = []
 	for sample in stroke.samples:
@@ -106,14 +111,14 @@ def calculate_stroke_similarity(
 	Calculate the similarity between two strokes based on neighborhood analysis.
 
 	Args:
-	    stroke1 (Stroke): First stroke to compare
-	    stroke2 (Stroke): Second stroke to compare
-	    mesh_data (MeshData): Mesh data containing vertices and faces
-	    max_spatial_distance (float): Maximum geodesic distance threshold
-	    max_temporal_difference (float): Maximum temporal difference threshold
+		stroke1 (Stroke): First stroke to compare
+		stroke2 (Stroke): Second stroke to compare
+		mesh_data (MeshData): Mesh data containing vertices and faces
+		max_spatial_distance (float): Maximum geodesic distance threshold
+		max_temporal_difference (float): Maximum temporal difference threshold
 
 	Returns:
-	    float: Similarity score between 0.0 (not similar) and 1.0 (identical)
+		float: Similarity score between 0.0 (not similar) and 1.0 (identical)
 	"""
 	geo_calc = CachedGeodesicCalculator(mesh_data.vertices, mesh_data.faces)
 

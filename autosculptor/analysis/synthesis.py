@@ -94,6 +94,22 @@ class StrokeSynthesizer:
 							new_sample, last_stroke, "surface"
 						)
 
+						print(f"--- Sample Mapping ---")
+						print(
+							f"Last sample (m={m}): ts={last_sample.ts:.8f}, ds={last_sample.ds:.8f}"
+						)
+						print(
+							f"Past sample (n={n}): ts={past_sample.ts:.8f}, ds={past_sample.ds:.8f}"
+						)
+						print(
+							f"Next sample (idx={next_sample_index}): ts={next_sample.ts:.8f}, ds={next_sample.ds:.8f}"
+						)
+						print(f"Deltas: d_ts={delta_ts:.8f}, d_ds={delta_ds:.8f}")
+						print(f"New Params: new_ts={new_ts:.8f}, new_ds={new_ds:.8f}")
+						print(f"World Pos Before: {last_sample.position}")
+						print(f"World Pos After: {new_position}")
+						print(f"----------------------")
+
 					elif new_suggestion.stroke_type == "freeform":
 						delta_xs = next_sample.xs - past_sample.xs
 						delta_ys = next_sample.ys - past_sample.ys
@@ -151,9 +167,9 @@ class StrokeSynthesizer:
 			neighborhood_distance = calculate_stroke_neighborhood_distance(
 				candidate_stroke,
 				past_stroke,
-				wp=1.0,
-				wa=0.5,
-				wt=0.3,
+				wp=0.5,
+				wa=0.3,
+				wt=0.2,
 				wn=0.3,
 				wc=0.2,
 			)
