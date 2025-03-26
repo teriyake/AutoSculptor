@@ -14,14 +14,17 @@ class SculptCapture:
 	Class to manage the sculpting capture process.
 	"""
 
-	def __init__(self):
-		self.previous_positions = {}  # {str: np.ndarray}
+	def __init__(self, update_history_callback=None, update_suggestion_callback=None):
+		self.previous_positions = {}
 		self.current_workflow = Workflow()
 		self.script_job_number = None
 		self.mesh_name = None
 		self.synthesizer = None
 		self.current_suggestions = []
-		print("SculptCapture initialized.")
+		self.suggestion_visualizers = []
+		self.update_history_callback = update_history_callback
+		self.update_suggestion_callback = update_suggestion_callback
+		self.is_capturing = False
 
 	def get_world_space_positions(self, mesh_name):
 		"""Gets world-space vertex positions for a mesh by name."""
@@ -147,6 +150,11 @@ class SculptCapture:
 				parameterizer = StrokeParameterizer(mesh_data)
 				parameterizer.parameterize_stroke(current_stroke, [0, 0, 1])
 				self.current_workflow.add_stroke(current_stroke)
+				if self.update_history_callback:
+					print("SculptCapture: update_history_callback exists")
+					self.update_history_callback(self.copy_workflow())
+				else:
+					print("SculptCapture: update_history_callback does not exist!!!")
 
 			self.previous_positions[self.mesh_name] = current_points
 
@@ -211,12 +219,76 @@ class SculptCapture:
 				self.current_suggestions = []
 				print("No suitable suggestion found.")
 
+			if self.update_suggestion_callback:
+				suggestion_workflow = Workflow()
+				for s in self.current_suggestions:
+					suggestion_workflow.add_stroke(s)
+				self.update_suggestion_callback(suggestion_workflow)
+
 		except Exception as e:
 			print(f"Error in generate_suggestions: {str(e)}")
 			import traceback
 
 			traceback.print_exc()
 			self.mesh_name = None
+
+	def copy_workflow(self):
+		new_workflow = Workflow()
+		new_workflow.strokes = list(self.current_workflow.strokes)
+		new_workflow.region = self.current_workflow.region
+
+		return new_workflow
+
+	def start_capture(self):
+		if self.script_job_number is not None:
+			print("Capture already running.")
+			return
+		if not self.mesh_name:
+			print("Cannot start capture: No mesh selected.")
+
+			selected = self.get_selected_mesh_name()
+			if not selected:
+				om2.MGlobal.displayError(
+					"Please select a mesh before starting capture."
+				)
+				return
+			self.mesh_name = selected
+			print(f"Using selected mesh: {self.mesh_name}")
+
+		self.previous_positions[self.mesh_name] = self.get_world_space_positions(
+			self.mesh_name
+		)
+		if self.previous_positions[self.mesh_name] is None:
+			print(
+				f"Warning: Could not get initial positions for {self.mesh_name}. Capture might be unreliable."
+			)
+
+		self.script_job_number = cmds.scriptJob(
+			event=["idle", self.process_mesh_changes],
+			killWithScene=True,
+		)
+		self.is_capturing = True
+		print(
+			f"Capture started. Registered script job: {self.script_job_number} for mesh: {self.mesh_name}"
+		)
+
+	def stop_capture(self):
+		if self.script_job_number is not None:
+			try:
+				cmds.scriptJob(kill=self.script_job_number, force=True)
+				print(f"Killed script job {self.script_job_number}")
+			except Exception as e:
+				print(f"Error killing script job {self.script_job_number}: {e}")
+			finally:
+				self.script_job_number = None
+				self.is_capturing = False
+
+				if self.mesh_name in self.previous_positions:
+					del self.previous_positions[self.mesh_name]
+				self.clear_suggestions()
+				print("Capture stopped.")
+		else:
+			print("Capture not running.")
 
 	def register_script_job(self):
 		"""Registers a script job to monitor for changes after sculpting."""
@@ -248,3 +320,5 @@ class SculptCapture:
 	def clear_suggestions(self):
 		"""Clears the current suggestion strokes."""
 		self.current_suggestions = []
+		if self.update_suggestion_callback:
+			self.update_suggestion_callback(Workflow())
