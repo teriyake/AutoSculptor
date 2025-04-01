@@ -201,13 +201,13 @@ class SculptingPanel(QWidget):
 			mesh_name = sculpt_capture.get_selected_mesh_name()
 			if mesh_name:
 				if sculpt_capture.mesh_name != mesh_name:
-					print(f"SculptingPanel: Mesh selected - {mesh_name}")
 					sculpt_capture.mesh_name = mesh_name
 
 					sculpt_capture.previous_positions = {}
 					sculpt_capture.previous_positions[
 						mesh_name
 					] = sculpt_capture.get_world_space_positions(mesh_name)
+					print(f"SculptingPanel: Mesh selected - {mesh_name}")
 					# self.main_window.sculpt_capture.current_workflow = Workflow()
 					# self.update(Workflow())
 					self.mesh_name_label.setText(
