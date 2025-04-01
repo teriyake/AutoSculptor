@@ -100,6 +100,122 @@ def calculate_stroke_neighborhoods(
 	return neighborhoods
 
 
+def find_neighboring_strokes(
+	target_stroke: Stroke,
+	workflow: Workflow,
+	num_temporal: int = 2,
+	spatial_radius_factor: float = 1.5,
+	temporal_window: float = 10.0,
+	geo_calc: Optional[CachedGeodesicCalculator] = None,
+) -> List[Stroke]:
+	"""
+	Finds neighboring strokes for a given target_stroke within a workflow.
+	Includes temporal predecessors and spatially close strokes within a time window.
+	"""
+	neighbors = []
+	target_stroke_index = -1
+	try:
+		target_stroke_index = workflow.strokes.index(target_stroke)
+	except ValueError:
+		pass
+
+	if target_stroke_index != -1:
+		start_index = max(0, target_stroke_index - num_temporal)
+		neighbors.extend(workflow.strokes[start_index:target_stroke_index])
+	else:
+		if workflow.strokes:
+			last_workflow_time = (
+				workflow.strokes[-1].end_time if workflow.strokes[-1].end_time else 0
+			)
+
+			temporal_candidates = sorted(
+				[
+					s
+					for s in workflow.strokes
+					if s.end_time is not None and s.end_time < last_workflow_time
+				],
+				key=lambda s: s.end_time,
+				reverse=True,
+			)
+			neighbors.extend(temporal_candidates[:num_temporal])
+
+	if not target_stroke.samples:
+		return neighbors
+
+	avg_target_size = (
+		target_stroke.brush_size
+		if target_stroke.brush_size
+		else np.mean([s.size for s in target_stroke.samples])
+	)
+	spatial_threshold = avg_target_size * spatial_radius_factor
+
+	target_time = (
+		target_stroke.start_time
+		if target_stroke.start_time is not None
+		else (workflow.strokes[-1].end_time if workflow.strokes else 0)
+	)
+
+	unique_neighbors = set(neighbors)
+
+	for potential_neighbor in workflow.strokes:
+		if potential_neighbor == target_stroke:
+			continue
+		if potential_neighbor in unique_neighbors:
+			continue
+		if not potential_neighbor.samples:
+			continue
+
+		neighbor_time = (
+			potential_neighbor.start_time
+			if potential_neighbor.start_time is not None
+			else 0
+		)
+		if abs(target_time - neighbor_time) > temporal_window:
+			continue
+
+		spatially_close = False
+		if geo_calc:
+			target_positions = np.array([s.position for s in target_stroke.samples])
+			neighbor_positions = np.array(
+				[s.position for s in potential_neighbor.samples]
+			)
+
+			# TODO: Check bounding boxes first
+			min_dist = float("inf")
+			# dist = geo_calc.compute_distance(target_positions[0], neighbor_positions[0:1])[0]
+			# min_dist = dist
+
+			try:
+				dists_target_to_neighbor = np.min(
+					geo_calc.compute_many_to_many(target_positions, neighbor_positions),
+					axis=1,
+				)
+				dists_neighbor_to_target = np.min(
+					geo_calc.compute_many_to_many(neighbor_positions, target_positions),
+					axis=1,
+				)
+
+				min_dist = min(
+					np.min(dists_target_to_neighbor), np.min(dists_neighbor_to_target)
+				)
+
+			except Exception as e:
+				print(
+					f"Warning: Geodesic distance calculation failed during neighbor finding: {e}"
+				)
+				continue
+
+			if min_dist < spatial_threshold:
+				spatially_close = True
+		else:
+			pass
+
+		if spatially_close:
+			unique_neighbors.add(potential_neighbor)
+
+	return list(unique_neighbors)
+
+
 def calculate_stroke_similarity(
 	stroke1: Stroke,
 	stroke2: Stroke,

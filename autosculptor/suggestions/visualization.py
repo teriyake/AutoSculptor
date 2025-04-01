@@ -1,6 +1,6 @@
 from autosculptor.core.data_structures import Sample, Stroke, Workflow
 import numpy as np
-import maya.cmds as cmds
+import maya.cmds as cmds  # type: ignore
 
 
 class StrokeVisualizer:
@@ -54,6 +54,7 @@ class StrokeVisualizer:
 			curve = cmds.curve(p=curve_points, d=1)  # Linear curve for fewer points
 		else:
 			curve = cmds.curve(p=curve_points, d=3)  # Cubic curve
+		cmds.fitBspline(ch=0, tol=0.01)
 
 		return curve
 

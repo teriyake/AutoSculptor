@@ -32,125 +32,114 @@ class StrokeParameterizer:
 			 stroke (Stroke): The stroke to normalize.
 		"""
 
+		if not stroke.samples:
+			return
+
+		total_arc_length = 0.0
+		segment_lengths = []
+		if len(stroke.samples) > 1:
+			for i in range(1, len(stroke.samples)):
+				length = np.linalg.norm(
+					stroke.samples[i].position - stroke.samples[i - 1].position
+				)
+				segment_lengths.append(length)
+				total_arc_length += length
+
+		cumulative_arc_length = 0.0
+		for i, sample in enumerate(stroke.samples):
+			if i > 0 and total_arc_length > 1e-8:
+				cumulative_arc_length += segment_lengths[i - 1]
+				sample.ts = cumulative_arc_length / total_arc_length
+			else:
+				sample.ts = 0.0
+
 		if stroke.stroke_type == "surface":
-			if not stroke.samples:
-				return
-
-			total_arc_length = 0.0
-			for i in range(1, len(stroke.samples)):
-				total_arc_length += np.linalg.norm(
-					stroke.samples[i].position - stroke.samples[i - 1].position
-				)
-			# print(f"Total arc length: {total_arc_length}")
-
-			cumulative_arc_length = 0.0
 			for i, sample in enumerate(stroke.samples):
-				if i > 0:
-					cumulative_arc_length += np.linalg.norm(
-						sample.position - stroke.samples[i - 1].position
+				(
+					position_on_path,
+					normal_on_path,
+					tangent_on_path,
+				) = self._get_position_normal_on_stroke_path(stroke, sample.ts)
+
+				offset_vector = sample.position - position_on_path
+
+				perp_direction = np.cross(tangent_on_path, normal_on_path)
+				perp_norm = np.linalg.norm(perp_direction)
+
+				if perp_norm < 1e-6:
+					print(
+						f"StrokeParameterizer: Warning: Degenerate perp_direction for sample {i} (ts={sample.ts:.3f}). Setting ds=0."
 					)
-				sample.ts = (
-					cumulative_arc_length / total_arc_length
-					if total_arc_length > 0
-					else 0.0
-				)
-				# print(
-				# f"Sample {i}: cumulative_arc_length={cumulative_arc_length}, ts={sample.ts}"
-				# )
+					sample.ds = 0.0
+					continue
 
-				min_dist = float("inf")
-				closest_stroke_sample_index = 0
+				perp_direction /= perp_norm
 
-				for j, stroke_sample in enumerate(stroke.samples):
-					dist = np.linalg.norm(sample.position - stroke_sample.position)
-					if sample == stroke_sample:
-						continue
+				try:
+					if np.linalg.norm(offset_vector) > 1e-8:
+						geodesic_dist_mag = self.geo_calc.compute_distance(
+							position_on_path, np.array([sample.position])
+						)[0]
+					else:
+						geodesic_dist_mag = 0.0
+				except Exception as e:
+					print(f"Error calculating geodesic distance for sample {i}: {e}")
+					geodesic_dist_mag = np.linalg.norm(offset_vector)
 
-					if dist < min_dist:
-						min_dist = dist
-						closest_stroke_sample_index = j
+				projected_offset_component = np.dot(offset_vector, perp_direction)
+				sign = np.sign(projected_offset_component)
+				if sign == 0:
+					sign = 1
 
-				closest_sample = stroke.samples[closest_stroke_sample_index]
-				geodesic_dist = self.geo_calc.compute_distance(
-					closest_sample.position, np.array([sample.position])
-				)[0]
+				signed_geodesic_dist = sign * geodesic_dist_mag
+				brush_radius = sample.size if sample.size > 1e-6 else 1.0
+				sample.ds = np.clip(signed_geodesic_dist / brush_radius, -1.0, 1.0)
 
-				# print(
-				# f"Sample {i}: closest_sample_pos={closest_sample.position}, sample_pos={sample.position}, geodesic_dist={geodesic_dist}"
-				# )
+				# print(f"Sample {i}: ts={sample.ts:.3f}, path_pos={position_on_path}, tangent={tangent_on_path}, normal={normal_on_path}")
+				# print(f"          sample_pos={sample.position}, offset_vec={offset_vector}")
+				# print(f"          perp_dir={perp_direction}, dot_prod={projected_offset_component}, sign={sign}")
+				# print(f"          geo_dist={geodesic_dist_mag:.4f}, signed_geo_dist={signed_geodesic_dist:.4f}, brush_radius={brush_radius:.4f}, final_ds={sample.ds:.4f}")
 
-				test_pos_plus = sample.position + sample.normal * 0.001
-				test_pos_minus = sample.position - sample.normal * 0.001
+		for i, sample in enumerate(stroke.samples):
+			sample.zs = (
+				cumulative_arc_length / total_arc_length
+				if total_arc_length > 0
+				else 0.0
+			)
 
-				geodesic_dist_plus = self.geo_calc.compute_distance(
-					closest_sample.position, np.array([test_pos_plus])
-				)[0]
-				geodesic_dist_minus = self.geo_calc.compute_distance(
-					closest_sample.position, np.array([test_pos_minus])
-				)[0]
+			if i > 0:
+				stroke_direction = sample.position - stroke.samples[i - 1].position
+				stroke_direction_norm = np.linalg.norm(stroke_direction)
+				if stroke_direction_norm > 1e-6:
+					stroke_direction = stroke_direction / stroke_direction_norm
+				# else:
+				# stroke_direction = np.array([0, 0, 0])
 
-				if geodesic_dist_plus < geodesic_dist_minus:
-					signed_geodesic_dist = geodesic_dist
-				else:
-					signed_geodesic_dist = -geodesic_dist
+			else:
+				stroke_direction = sample.normal
+				stroke_direction_norm = np.linalg.norm(stroke_direction)
+				if stroke_direction_norm > 1e-6:
+					stroke_direction = stroke_direction / stroke_direction_norm
+				# else:
+				# stroke_direction = np.array([0, 0, 0])
 
-				sample.ds = np.clip(signed_geodesic_dist / sample.size, -1.0, 1.0)
+			y_direction = np.cross(stroke_direction, sample.camera_lookat)
+			y_direction_norm = np.linalg.norm(y_direction)
 
-		elif stroke.stroke_type == "freeform":
-			if not stroke.samples:
-				return
+			if y_direction_norm > 1e-6:
+				y_direction = y_direction / y_direction_norm
+			else:
+				y_direction = np.array([0, 0, 0])
 
-			total_arc_length = 0.0
-			for i in range(1, len(stroke.samples)):
-				total_arc_length += np.linalg.norm(
-					stroke.samples[i].position - stroke.samples[i - 1].position
-				)
+			x_direction = np.cross(y_direction, stroke_direction)
+			x_direction_norm = np.linalg.norm(x_direction)
+			if x_direction_norm > 1e-6:
+				x_direction = x_direction / x_direction_norm
+			else:
+				x_direction = np.array([0, 0, 0])
 
-			cumulative_arc_length = 0.0
-			for i, sample in enumerate(stroke.samples):
-				if i > 0:
-					cumulative_arc_length += np.linalg.norm(
-						sample.position - stroke.samples[i - 1].position
-					)
-				sample.zs = (
-					cumulative_arc_length / total_arc_length
-					if total_arc_length > 0
-					else 0.0
-				)
-
-				if i > 0:
-					stroke_direction = sample.position - stroke.samples[i - 1].position
-					stroke_direction_norm = np.linalg.norm(stroke_direction)
-					if stroke_direction_norm > 1e-6:
-						stroke_direction = stroke_direction / stroke_direction_norm
-					# else:
-					# stroke_direction = np.array([0, 0, 0])
-
-				else:
-					stroke_direction = sample.normal
-					stroke_direction_norm = np.linalg.norm(stroke_direction)
-					if stroke_direction_norm > 1e-6:
-						stroke_direction = stroke_direction / stroke_direction_norm
-					# else:
-					# stroke_direction = np.array([0, 0, 0])
-
-				y_direction = np.cross(stroke_direction, sample.camera_lookat)
-				y_direction_norm = np.linalg.norm(y_direction)
-
-				if y_direction_norm > 1e-6:
-					y_direction = y_direction / y_direction_norm
-				else:
-					y_direction = np.array([0, 0, 0])
-
-				x_direction = np.cross(y_direction, stroke_direction)
-				x_direction_norm = np.linalg.norm(x_direction)
-				if x_direction_norm > 1e-6:
-					x_direction = x_direction / x_direction_norm
-				else:
-					x_direction = np.array([0, 0, 0])
-
-				sample.xs = np.dot(sample.position, x_direction) / (sample.size + 1e-8)
-				sample.ys = np.dot(sample.position, y_direction) / (sample.size + 1e-8)
+			sample.xs = np.dot(sample.position, x_direction) / (sample.size + 1e-8)
+			sample.ys = np.dot(sample.position, y_direction) / (sample.size + 1e-8)
 
 	def parameterize_stroke(self, stroke: Stroke, camera_lookat: np.ndarray):
 		"""Adds the local parameterization to the samples in a stroke.
@@ -166,7 +155,11 @@ class StrokeParameterizer:
 		self.normalize_stroke_parameters(stroke)
 
 	def inverse_parameterize_surface(
-		self, stroke: Stroke, ts: float, ds: float, original_sample: Sample
+		self,
+		stroke: Stroke,
+		ts: float,
+		ds: float,
+		original_sample: Sample,
 	) -> Tuple[np.ndarray, np.ndarray]:
 		"""
 		Converts surface stroke parameters (ts, ds) back to world space,
@@ -208,48 +201,27 @@ class StrokeParameterizer:
 		world_offset = ds * original_sample.size
 		target_pos_initial = position_on_stroke + perpendicular_direction * world_offset
 
-		print(f"  InverseParam: ts={ts:.4f}, ds={ds:.4f}")
-		print(f"  InverseParam: pos_on_stroke={position_on_stroke}")
-		print(f"  InverseParam: norm_on_stroke={normal_on_stroke}")
-		print(f"  InverseParam: tangent_on_stroke={tangent_on_stroke}")
-		print(f"  InverseParam: perp_dir={perpendicular_direction}")
-		print(f"  InverseParam: world_offset={world_offset:.4f}")
-		print(f"  InverseParam: target_pos_initial={target_pos_initial}")
+		final_position = target_pos_initial
+		final_normal = normal_on_stroke
 
-		closest_vertex_index = self.geo_calc.find_closest_vertex(target_pos_initial)
+		if self.mesh_data and self.mesh_data.maya_mesh_fn:
+			from autosculptor.core.mesh_interface import MeshInterface
 
-		if (
-			self.mesh_data is None
-			or not hasattr(self.mesh_data, "vertices")
-			or len(self.mesh_data.vertices) == 0
-		):
-			print("Error: Mesh data or vertices not available for snapping.")
-			return target_pos_initial, normal_on_stroke  # Fallback
-
-		if closest_vertex_index >= len(self.mesh_data.vertices):
-			print(
-				f"Error: closest_vertex_index {closest_vertex_index} out of bounds for vertices length {len(self.mesh_data.vertices)}"
+			closest_pt_data = MeshInterface.find_closest_point(
+				self.mesh_data, target_pos_initial
 			)
-			final_position = target_pos_initial
-			final_normal = normal_on_stroke
-		else:
-			final_position = self.mesh_data.vertices[closest_vertex_index]
-
-			if hasattr(self.mesh_data, "normals") and closest_vertex_index < len(
-				self.mesh_data.normals
-			):
-				final_normal = self.mesh_data.normals[closest_vertex_index]
+			if closest_pt_data and closest_pt_data[0] is not None:
+				final_position = np.array(closest_pt_data[0])
+				final_normal = np.array(closest_pt_data[1])
 				norm_mag = np.linalg.norm(final_normal)
 				if norm_mag > 1e-6:
-					final_normal = final_normal / norm_mag
+					final_normal /= norm_mag
 				else:
 					final_normal = normal_on_stroke
-			else:
-				final_normal = normal_on_stroke
-
-		print(f"  InverseParam: snapped_vertex_idx={closest_vertex_index}")
-		print(f"  InverseParam: final_pos (snapped)={final_position}")
-		print(f"  InverseParam: final_normal={final_normal}")
+				print(f"  InverseParam: final_pos (projected)={final_position}")
+				print(f"  InverseParam: final_normal (projected)={final_normal}")
+		else:
+			print(f"  InverseParam: Error getting mesh data for projection.")
 
 		return final_position, final_normal
 
@@ -437,7 +409,10 @@ class StrokeParameterizer:
 		return final_position, final_normal
 
 	def _params_to_world(
-		self, sample: Sample, original_stroke: Stroke, stroke_type: str
+		self,
+		sample: Sample,
+		original_stroke: Stroke,
+		stroke_type: str,
 	) -> Tuple[np.ndarray, np.ndarray]:
 		if stroke_type == "surface":
 			# print(f"ts: {sample.ts}, ds: {sample.ds}")

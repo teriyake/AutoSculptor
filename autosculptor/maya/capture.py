@@ -1,18 +1,25 @@
-import maya.cmds as cmds
-import maya.api.OpenMaya as om2
+import maya.cmds as cmds  # type: ignore
+import maya.api.OpenMaya as om2  # type: ignore
 import numpy as np
+import time
+from typing import Optional
 
 from autosculptor.core.data_structures import Sample, Stroke, Workflow
 from autosculptor.core.mesh_interface import MeshInterface
 from autosculptor.analysis.synthesis import StrokeSynthesizer
 from autosculptor.analysis.parameterization import StrokeParameterizer
 from autosculptor.suggestions.visualization import StrokeVisualizer
+from autosculptor.analysis.geodesic_calculator import CachedGeodesicCalculator
+from autosculptor.maya.utils import get_active_camera_lookat_vector
 
 
 class SculptCapture:
 	"""
 	Class to manage the sculpting capture process.
 	"""
+
+	INTERPOLATED_SAMPLES_PER_EVENT = 5
+	STROKE_END_TIMEOUT = 0.25
 
 	def __init__(self, update_history_callback=None, update_suggestion_callback=None):
 		self.previous_positions = {}
@@ -26,6 +33,10 @@ class SculptCapture:
 		self.update_suggestion_callback = update_suggestion_callback
 		self.is_capturing = False
 		self.suggestions_enabled = False
+
+		self.is_user_actively_sculpting = False
+		self.active_stroke_in_progress: Optional[Stroke] = None
+		self.last_change_time: float = 0.0
 
 	def get_world_space_positions(self, mesh_name):
 		"""Gets world-space vertex positions for a mesh by name."""
@@ -130,6 +141,60 @@ class SculptCapture:
 			]
 			if not moved_indices:
 				return
+			print(f"SculptCapture: Detected {len(moved_indices)} moved vertices.")
+
+			"""
+			moved_points_current = current_points[moved_indices]
+			centroid = np.mean(moved_points_current, axis=0)
+
+			mesh_data = MeshInterface.get_mesh_data(self.mesh_name)
+			closest_point_data = MeshInterface.find_closest_point(mesh_data, centroid)
+
+			if closest_point_data and closest_point_data[0] is not None:
+				sample_position = np.array(closest_point_data[0])
+				sample_normal = np.array(closest_point_data[1])
+				norm_mag = np.linalg.norm(sample_normal)
+				if norm_mag > 1e-6:
+					sample_normal /= norm_mag
+				else:
+					sample_normal = np.array([0.0, 1.0, 0.0])
+
+				current_time = time.time()
+
+				representative_sample = Sample(
+					position=sample_position,
+					normal=sample_normal,
+					size=brush_size,
+					pressure=brush_pressure,
+					timestamp=current_time,
+				)
+
+				current_stroke = Stroke()
+				current_stroke.stroke_type = "surface"
+				current_stroke.brush_size = brush_size
+				current_stroke.brush_strength = brush_pressure
+				# TODO: Determine brush mode (Add/Subtract/Smooth) if possible from context
+				current_stroke.brush_mode = "ADD"
+				current_stroke.brush_falloff = "smooth"
+
+				current_stroke.add_sample(representative_sample)
+				print(
+					f"SculptCapture: Created representative sample at {sample_position}"
+				)
+
+			else:
+				print(
+					"SculptCapture: Could not find closest point for centroid. Skipping stroke."
+				)
+				self.previous_positions[self.mesh_name] = current_points
+				if self.synthesizer and self.synthesizer.parameterizer:
+					self.synthesizer.parameterizer.mesh_data = mesh_data
+					self.synthesizer.parameterizer.geo_calc = CachedGeodesicCalculator(
+						mesh_data.vertices, mesh_data.faces
+					)
+				return
+
+			"""
 
 			samples = [
 				Sample(
@@ -150,10 +215,21 @@ class SculptCapture:
 					self.previous_positions[self.mesh_name] = current_points
 					return
 
-				parameterizer = StrokeParameterizer(mesh_data)
-				# TODO: Get camera view vector from Maya (tho it shouldn't matter for surface strokes)
-				camera_lookat = [0, 0, 1]
-				parameterizer.parameterize_stroke(current_stroke, camera_lookat)
+				if not self.synthesizer:
+					self.synthesizer = StrokeSynthesizer(mesh_data)
+				elif self.synthesizer.parameterizer:
+					self.synthesizer.parameterizer.mesh_data = mesh_data
+					self.synthesizer.parameterizer.geo_calc = CachedGeodesicCalculator(
+						mesh_data.vertices, mesh_data.faces
+					)
+				else:
+					self.synthesizer.parameterizer = StrokeParameterizer(mesh_data)
+
+				camera_lookat = get_active_camera_lookat_vector()
+
+				self.synthesizer.parameterizer.parameterize_stroke(
+					current_stroke, camera_lookat
+				)
 				self.current_workflow.add_stroke(current_stroke)
 
 				if self.update_history_callback:
@@ -243,7 +319,10 @@ class SculptCapture:
 				self.synthesizer = StrokeSynthesizer(mesh_data)
 
 			suggestion = self.synthesizer.synthesize_next_stroke(
-				self.current_workflow, 1.0, 1.0, 10
+				self.current_workflow,
+				MeshInterface.get_mesh_data(self.mesh_name),
+				5,
+				100.0,
 			)
 			if suggestion:
 				self.current_suggestions = [suggestion]

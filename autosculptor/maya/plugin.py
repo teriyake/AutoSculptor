@@ -5,10 +5,10 @@ from autosculptor.maya.test_ui import TestUI
 from autosculptor.maya.viewport_drawer import SuggestionDrawer
 
 try:
-	import maya.cmds as cmds
-	import maya.OpenMayaMPx as OpenMayaMPx
-	import maya.OpenMaya as om
-	import maya.api.OpenMayaRender as omr
+	import maya.cmds as cmds  # type: ignore
+	import maya.OpenMayaMPx as OpenMayaMPx  # type: ignore
+	import maya.OpenMaya as om  # type: ignore
+	import maya.api.OpenMayaRender as omr  # type: ignore
 except ImportError:
 	print("Maya modules not available. Running in standalone mode.")
 
@@ -232,6 +232,41 @@ class AutoSculptorDrawNode(OpenMayaMPx.MPxLocatorNode):
 		pass
 
 
+def show_sculpting_tool_window_action():
+	window_name = "autoSculptingToolWindow"
+	if cmds.window(window_name, q=True, exists=True):
+		cmds.deleteUI(window_name, window=True)
+
+	import autosculptor.ui.ui as ui
+
+	ui.show_sculpting_tool_window()
+
+
+def create_test_sphere_action():
+	cmds.polySphere(
+		name="autoScuptorTestSphere", radius=10, subdivisionsX=50, subdivisionsY=50
+	)
+
+
+def create_menu():
+	menu_name = "AutoSculptorMenu"
+	if cmds.menu(menu_name, exists=True):
+		cmds.deleteUI(menu_name)
+	cmds.menu(menu_name, parent="MayaWindow", tearOff=False, label="AutoSculptor")
+
+	cmds.menuItem(
+		parent=menu_name,
+		label="Open UI Panel",
+		command=lambda *args: show_sculpting_tool_window_action(),
+	)
+
+	cmds.menuItem(
+		parent=menu_name,
+		label="Create Test Sphere",
+		command=lambda *args: create_test_sphere_action(),
+	)
+
+
 def initializePlugin(mobject):
 	mplugin = OpenMayaMPx.MFnPlugin(mobject, "AutoSculptor", "1.0", "Any")
 	try:
@@ -254,6 +289,8 @@ def initializePlugin(mobject):
 			SuggestionDrawer.creator,
 		)
 
+		create_menu()
+
 		om.MGlobal.displayInfo(
 			"AutoSculptor plugin loaded, command and draw override registered!"
 		)
@@ -272,6 +309,8 @@ def uninitializePlugin(mobject):
 		om.MGlobal.displayInfo(
 			"AutoSculptor plugin unloaded, command and draw override deregistered!"
 		)
+		cmds.deleteUI("AutoSculptorMenu", menu=True)
+
 	except Exception as e:
 		sys.stderr.write(f"Failed to deregister command or draw override: {e}\n")
 		# raise
