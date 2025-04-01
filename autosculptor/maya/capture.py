@@ -5,7 +5,7 @@ import time
 from typing import Optional
 
 from autosculptor.core.data_structures import Sample, Stroke, Workflow
-from autosculptor.core.mesh_interface import MeshInterface
+from autosculptor.core.mesh_interface import MeshData, MeshInterface
 from autosculptor.analysis.synthesis import StrokeSynthesizer
 from autosculptor.analysis.parameterization import StrokeParameterizer
 from autosculptor.suggestions.visualization import StrokeVisualizer
@@ -92,15 +92,42 @@ class SculptCapture:
 			print(f"Failed to get value from tool: {e}")
 			return 1.0, 1.0
 
+	def _ensure_synthesizer_mesh(self, mesh_data: MeshData):
+		"""
+		Ensures synthesizer exists and its parameterizer has current mesh data.
+		"""
+		if not self.synthesizer:
+			try:
+				self.synthesizer = StrokeSynthesizer(mesh_data)
+				print("SculptCapture: Initialized StrokeSynthesizer.")
+			except Exception as e:
+				print(f"SculptCapture: Error initializing synthesizer: {e}")
+				self.synthesizer = None
+		elif self.synthesizer.parameterizer:
+			if not np.array_equal(
+				self.synthesizer.parameterizer.mesh_data.vertices, mesh_data.vertices
+			):
+				self.synthesizer.parameterizer.mesh_data = mesh_data
+				try:
+					self.synthesizer.parameterizer.geo_calc = CachedGeodesicCalculator(
+						mesh_data.vertices, mesh_data.faces
+					)
+				except Exception as e:
+					print(f"SculptCapture: Error updating geo_calc: {e}")
+					self.synthesizer.parameterizer.geo_calc = None
+		else:
+			try:
+				self.synthesizer.parameterizer = StrokeParameterizer(mesh_data)
+				print(
+					"SculptCapture: Initialized missing parameterizer in synthesizer."
+				)
+			except Exception as e:
+				print(f"SculptCapture: Error initializing missing parameterizer: {e}")
+
 	def process_mesh_changes(self):
 		"""Processes mesh changes after a potential sculpt operation."""
-
 		if not self.mesh_name:
 			return
-		if not self.synthesizer is None:
-			self.synthesizer.parameterizer.mesh_data = MeshInterface.get_mesh_data(
-				self.mesh_name
-			)
 
 		tool_name = self.get_active_sculpt_tool()
 		if not tool_name:
@@ -125,106 +152,197 @@ class SculptCapture:
 				self.previous_positions[self.mesh_name] = current_points
 				return
 
-			current_stroke = Stroke()
-			current_stroke.stroke_type = "surface"
-			current_time = cmds.currentTime(query=True)
+			moved_indices = []
+			displacements = []
+			displacement_magnitudes = []
+
+			for i in range(len(current_points)):
+				displacement = current_points[i] - previous_points[i]
+				magnitude = np.linalg.norm(displacement)
+				if magnitude > 1e-5:
+					moved_indices.append(i)
+					displacements.append(displacement)
+					displacement_magnitudes.append(magnitude)
+
+			if not moved_indices:
+				return
+
+			print(f"SculptCapture: Detected {len(moved_indices)} moved vertices.")
+
+			mesh_data = MeshInterface.get_mesh_data(self.mesh_name)
+			if not mesh_data:
+				self.previous_positions[self.mesh_name] = current_points
+				return
+
+			if not self.synthesizer:
+				self.synthesizer = StrokeSynthesizer(mesh_data)
+				print("SculptCapture: Initialized StrokeSynthesizer.")
+			self._ensure_synthesizer_mesh(mesh_data)
 
 			normals = self.get_world_space_normals(self.mesh_name)
 			if normals is None:
 				return
 
-			# TODO: We may want to do something else here (i.e., do not use moved vertices as samples points of the captured stroke)
-			moved_indices = [
-				i
-				for i in range(len(current_points))
-				if np.linalg.norm(current_points[i] - previous_points[i]) > 1e-5
-			]
-			if not moved_indices:
-				return
-			print(f"SculptCapture: Detected {len(moved_indices)} moved vertices.")
+			current_time = time.time()
+			stroke_continued = False
 
-			"""
-			moved_points_current = current_points[moved_indices]
-			centroid = np.mean(moved_points_current, axis=0)
-
-			mesh_data = MeshInterface.get_mesh_data(self.mesh_name)
-			closest_point_data = MeshInterface.find_closest_point(mesh_data, centroid)
-
-			if closest_point_data and closest_point_data[0] is not None:
-				sample_position = np.array(closest_point_data[0])
-				sample_normal = np.array(closest_point_data[1])
-				norm_mag = np.linalg.norm(sample_normal)
-				if norm_mag > 1e-6:
-					sample_normal /= norm_mag
-				else:
-					sample_normal = np.array([0.0, 1.0, 0.0])
-
-				current_time = time.time()
-
-				representative_sample = Sample(
-					position=sample_position,
-					normal=sample_normal,
-					size=brush_size,
-					pressure=brush_pressure,
-					timestamp=current_time,
-				)
-
+			if (
+				self.active_stroke_in_progress
+				and current_time - self.last_change_time < self.STROKE_END_TIMEOUT
+			):
+				current_stroke = self.active_stroke_in_progress
+				stroke_continued = True
+				print("SculptCapture: Continuing active stroke")
+			else:
 				current_stroke = Stroke()
 				current_stroke.stroke_type = "surface"
 				current_stroke.brush_size = brush_size
 				current_stroke.brush_strength = brush_pressure
-				# TODO: Determine brush mode (Add/Subtract/Smooth) if possible from context
 				current_stroke.brush_mode = "ADD"
 				current_stroke.brush_falloff = "smooth"
+				print("SculptCapture: Created new stroke")
 
-				current_stroke.add_sample(representative_sample)
-				print(
-					f"SculptCapture: Created representative sample at {sample_position}"
+			moved_points = current_points[moved_indices]
+			min_coords = np.min(moved_points, axis=0)
+			max_coords = np.max(moved_points, axis=0)
+
+			bbox_size = max_coords - min_coords
+			bbox_diagonal = np.linalg.norm(bbox_size)
+
+			divisions = max(1, int(bbox_diagonal / (brush_size * 0.5)))
+			divisions = min(divisions, 10)
+
+			if divisions <= 1:
+				centroid = np.mean(moved_points, axis=0)
+				closest_point_data = MeshInterface.find_closest_point(
+					mesh_data, centroid
 				)
 
+				if closest_point_data and closest_point_data[0] is not None:
+					sample_position = np.array(closest_point_data[0])
+					sample_normal = np.array(closest_point_data[1])
+
+					norm_mag = np.linalg.norm(sample_normal)
+					if norm_mag > 1e-6:
+						sample_normal /= norm_mag
+					else:
+						sample_normal = np.array([0.0, 1.0, 0.0])
+
+					sample = Sample(
+						position=sample_position,
+						normal=sample_normal,
+						size=brush_size,
+						pressure=brush_pressure,
+						timestamp=current_time,
+					)
+					current_stroke.add_sample(sample)
+					print(f"SculptCapture: Added centroid at {sample_position}")
+			else:
+				from sklearn.decomposition import PCA
+
+				if len(moved_points) >= 2:
+					pca = PCA(n_components=1)
+					pca.fit(moved_points)
+
+					principal_direction = pca.components_[0]
+
+					projections = np.dot(
+						moved_points - np.mean(moved_points, axis=0),
+						principal_direction,
+					)
+
+					sorted_indices = np.argsort(projections)
+
+					num_samples = min(divisions, len(sorted_indices))
+
+					sample_indices = []
+					if num_samples > 1:
+						for i in range(num_samples):
+							idx = int(
+								(i / (num_samples - 1)) * (len(sorted_indices) - 1)
+							)
+							sample_indices.append(sorted_indices[idx])
+					else:
+						sample_indices = [sorted_indices[len(sorted_indices) // 2]]
+
+					for idx in sample_indices:
+						original_idx = moved_indices[idx]
+						point = current_points[original_idx]
+						normal = normals[original_idx]
+
+						norm_mag = np.linalg.norm(normal)
+						if norm_mag > 1e-6:
+							normal = normal / norm_mag
+
+						time_offset = 0.01 * sample_indices.index(idx)
+						sample = Sample(
+							position=point,
+							normal=normal,
+							size=brush_size,
+							pressure=brush_pressure,
+							timestamp=current_time + time_offset,
+						)
+
+						is_distinct = True
+						for existing_sample in current_stroke.samples:
+							distance = np.linalg.norm(existing_sample.position - point)
+							if distance < brush_size * 0.2:
+								is_distinct = False
+								break
+
+						if is_distinct:
+							current_stroke.add_sample(sample)
+							print(f"SculptCapture: Added sample at {point}")
+				else:
+					centroid = np.mean(moved_points, axis=0)
+					closest_point_data = MeshInterface.find_closest_point(
+						mesh_data, centroid
+					)
+
+					if closest_point_data and closest_point_data[0] is not None:
+						sample_position = np.array(closest_point_data[0])
+						sample_normal = np.array(closest_point_data[1])
+
+						norm_mag = np.linalg.norm(sample_normal)
+						if norm_mag > 1e-6:
+							sample_normal /= norm_mag
+						else:
+							sample_normal = np.array([0.0, 1.0, 0.0])
+
+						sample = Sample(
+							position=sample_position,
+							normal=sample_normal,
+							size=brush_size,
+							pressure=brush_pressure,
+							timestamp=current_time,
+						)
+						current_stroke.add_sample(sample)
+						print(
+							f"SculptCapture: Added centroid sample at {sample_position}"
+						)
+
+			self.active_stroke_in_progress = current_stroke
+			self.last_change_time = current_time
+
+			should_finalize = False
+
+			idle_duration = self.STROKE_END_TIMEOUT * 0.8
+			if current_time - self.last_change_time > idle_duration:
+				should_finalize = True
+
+			if len(current_stroke.samples) >= 5:
+				should_finalize = True
+
+			if stroke_continued:
+				print(
+					f"SculptCapture: Continued active stroke, now {len(current_stroke.samples)} samples"
+				)
 			else:
 				print(
-					"SculptCapture: Could not find closest point for centroid. Skipping stroke."
+					f"SculptCapture: Started new active stroke with {len(current_stroke.samples)} samples"
 				)
-				self.previous_positions[self.mesh_name] = current_points
-				if self.synthesizer and self.synthesizer.parameterizer:
-					self.synthesizer.parameterizer.mesh_data = mesh_data
-					self.synthesizer.parameterizer.geo_calc = CachedGeodesicCalculator(
-						mesh_data.vertices, mesh_data.faces
-					)
-				return
 
-			"""
-
-			samples = [
-				Sample(
-					position=current_points[i],
-					normal=normals[i],
-					size=brush_size,
-					pressure=brush_pressure,
-					timestamp=current_time,
-				)
-				for i in moved_indices
-			]
-			for s in samples:
-				current_stroke.add_sample(s)
-
-			if len(current_stroke) > 0:
-				mesh_data = MeshInterface.get_mesh_data(self.mesh_name)
-				if not mesh_data:
-					self.previous_positions[self.mesh_name] = current_points
-					return
-
-				if not self.synthesizer:
-					self.synthesizer = StrokeSynthesizer(mesh_data)
-				elif self.synthesizer.parameterizer:
-					self.synthesizer.parameterizer.mesh_data = mesh_data
-					self.synthesizer.parameterizer.geo_calc = CachedGeodesicCalculator(
-						mesh_data.vertices, mesh_data.faces
-					)
-				else:
-					self.synthesizer.parameterizer = StrokeParameterizer(mesh_data)
-
+			if should_finalize and len(current_stroke.samples) > 0:
 				camera_lookat = get_active_camera_lookat_vector()
 
 				self.synthesizer.parameterizer.parameterize_stroke(
@@ -232,10 +350,14 @@ class SculptCapture:
 				)
 				self.current_workflow.add_stroke(current_stroke)
 
+				print(
+					f"SculptCapture: Finalized stroke with {len(current_stroke.samples)} samples"
+				)
+
+				self.active_stroke_in_progress = None
+
 				if self.update_history_callback:
 					self.update_history_callback(self.copy_workflow())
-				else:
-					print("SculptCapture: update_history_callback does not exist!!!")
 
 				if self.suggestions_enabled and len(self.current_workflow.strokes) > 1:
 					print("SculptCapture: Generating suggestions...")
@@ -426,6 +548,12 @@ class SculptCapture:
 		else:
 			print("No script job to unregister.")
 
+	def clear_suggestion_visualizers(self):
+		if self.suggestion_visualizers:
+			for viz in self.suggestion_visualizers:
+				viz.clear()
+			self.suggestion_visualizers.clear()
+
 	def clear_suggestions(self):
 		"""Clears the current suggestion strokes and updates the UI."""
 		if self.current_suggestions:
@@ -455,16 +583,37 @@ class SculptCapture:
 		else:
 			print(f"WARNING: Invalid stroke index for deletion: {stroke_index}")
 
+	def visualize_suggestions(self):
+		"""Creates visualizers for the current suggestions."""
+		self.clear_suggestion_visualizers()
+		if not self.mesh_name or not cmds.objExists(self.mesh_name):
+			print("Cannot visualize suggestions, mesh not valid.")
+			return
+
+		if self.current_suggestions:
+			print(
+				f"Attempting to visualize {len(self.current_suggestions)} suggestions..."
+			)
+			for i, stroke in enumerate(self.current_suggestions):
+				try:
+					viz = StrokeVisualizer(self.mesh_name, f"suggestion_viz_{i}")
+					viz.set_stroke(stroke)
+					viz.show()
+					self.suggestion_visualizers.append(viz)
+					print(f"Visualizer created for suggestion {i}")
+				except Exception as e:
+					print(f"Error creating visualizer for suggestion {i}: {e}")
+					import traceback
+
+					traceback.print_exc()
+
 	def set_suggestions_enabled(self, enabled: bool):
 		self.suggestions_enabled = enabled
 		if not enabled:
 			self.clear_suggestions()
-
-			for viz in self.suggestion_visualizers:
-				viz.clear()
-			self.suggestion_visualizers.clear()
-		elif enabled and self.is_capturing and len(self.current_workflow.strokes) > 0:
+		elif enabled and self.is_capturing and len(self.current_workflow.strokes) > 1:
 			self.generate_suggestions()
+			self.visualize_suggestions()
 
 	def cleanup(self):
 		self.stop_capture()

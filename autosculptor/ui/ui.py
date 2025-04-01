@@ -1,4 +1,4 @@
-from PySide2.QtWidgets import (
+from PySide2.QtWidgets import (  # type: ignore
 	QDialog,
 	QVBoxLayout,
 	QLabel,
@@ -14,10 +14,10 @@ from PySide2.QtWidgets import (
 	QTabWidget,
 	QWidget,
 )
-from PySide2.QtCore import Qt
-import maya.OpenMayaUI as omui
-from shiboken2 import wrapInstance
-import maya.cmds as cmds
+from PySide2.QtCore import Qt  # type: ignore
+import maya.OpenMayaUI as omui  # type: ignore
+from shiboken2 import wrapInstance  # type: ignore
+import maya.cmds as cmds  # type: ignore
 import numpy as np
 
 from autosculptor.core.data_structures import Sample, Stroke, Workflow
@@ -270,7 +270,8 @@ class SculptingPanel(QWidget):
 						print("SculptingPanel: Cannot start capture, no mesh selected.")
 						self.enable_capture.setChecked(False)
 				else:
-					print("SculptingPanel: Capture already enabled.")
+					self.main_window.sculpt_capture.start_capture()
+					self.mesh_button.setEnabled(False)
 			else:
 				if self.main_window.sculpt_capture:
 					print("SculptingPanel: Disabling capture...")
@@ -481,21 +482,21 @@ class SuggestionPanel(QWidget):
 				if len(sc.current_workflow.strokes) > 1:
 					sc.generate_suggestions()
 				else:
-					om2.MGlobal.displayWarning(
+					om2.MGlobal.displayWarning(  # type: ignore
 						"Cannot recompute: No stroke history captured yet."
 					)
 					sc.clear_suggestions()
 			elif not sc.is_capturing:
-				om2.MGlobal.displayWarning(
+				om2.MGlobal.displayWarning(  # type: ignore
 					"Cannot recompute: History capture is not enabled."
 				)
 			else:
-				om2.MGlobal.displayWarning(
+				om2.MGlobal.displayWarning(  # type: ignore
 					"Cannot recompute: Suggestion generation is disabled."
 				)
 				sc.clear_suggestions()
 		else:
-			om2.MGlobal.displayWarning(
+			om2.MGlobal.displayWarning(  # type: ignore
 				"Cannot recompute: Capture system not initialized."
 			)
 
@@ -509,7 +510,7 @@ class SuggestionPanel(QWidget):
 		self.stroke_list.itemSelectionChanged.disconnect(
 			self.on_stroke_selection_changed
 		)
-		self.recompute_btn.clicked.disconnect(self.on_recompute_clicked)
+		# self.recompute_btn.clicked.disconnect(self.on_recompute_clicked)
 
 		# TODO: Make sure to disconnect other signals here if we connect them later
 
@@ -534,7 +535,7 @@ class AutoSculptorToolWindow(QDialog):
 		layout.addWidget(self.tabs)
 		self.setLayout(layout)
 
-		self.setDockable()
+		# self.setDockable()
 
 	def setDockable(self):
 		try:
@@ -550,6 +551,20 @@ class AutoSculptorToolWindow(QDialog):
 				mixin_widget.layout().addWidget(self)
 		except Exception as e:
 			print("Failed to dock window:", e)
+
+	def closeEvent(self, event):
+		"""Override close event for cleanup."""
+		if hasattr(self, "sculpting_tab") and self.sculpting_tab:
+			self.sculpting_tab.cleanup()
+		if hasattr(self, "suggestion_tab") and self.suggestion_tab:
+			self.suggestion_tab.cleanup()
+
+		if self.sculpt_capture:
+			self.sculpt_capture.cleanup()
+			self.sculpt_capture = None
+
+		super().closeEvent(event)
+		print("AutoSculptorToolWindow cleaned up.")
 
 
 def show_sculpting_tool_window():
