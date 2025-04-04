@@ -23,6 +23,9 @@ import numpy as np
 from autosculptor.core.data_structures import Sample, Stroke, Workflow
 from autosculptor.core.brush import Brush, BrushMode
 from autosculptor.maya.capture import SculptCapture
+from autosculptor.suggestions.visualization import StrokeVisualizer
+
+from typing import Optional
 
 
 def get_maya_main_window():
@@ -76,6 +79,9 @@ def generate_random_workflow(num_strokes):
 
 
 class SculptingPanel(QWidget):
+	HISTORY_VIZ_COLOR = (0.2, 0.5, 1.0)
+	HISTORY_VIZ_TRANSPARENCY = (0.6, 0.6, 0.6)
+
 	def __init__(self, main_window_ref, parent=None):
 		super().__init__(parent)
 		self.main_window = main_window_ref
@@ -139,6 +145,7 @@ class SculptingPanel(QWidget):
 		self.setLayout(layout)
 
 		self.workflow = None
+		self.history_visualizer: Optional[StrokeVisualizer] = None
 		# self.update(generate_random_workflow(5))
 
 	def update(self, workflow):
@@ -147,6 +154,8 @@ class SculptingPanel(QWidget):
 		Each stroke should be a dictionary with keys: brush_type, brush_mode, brush_falloff, brush_size, brush_strength
 		"""
 		self.stroke_list.setRowCount(0)  # Clear existing rows
+		self.clear_history_visualization()  # Clear history visualization before updating list
+
 		for stroke in workflow.strokes:
 			row_position = self.stroke_list.rowCount()
 			self.stroke_list.insertRow(row_position)
@@ -194,6 +203,15 @@ class SculptingPanel(QWidget):
 			self.sample_list.setItem(
 				row_position, 4, QTableWidgetItem(str(smp.timestamp))
 			)
+
+	def clear_history_visualization(self):
+		if self.history_visualizer:
+			try:
+				self.history_visualizer.clear()
+			except Exception as e:
+				print(f"SculptingPanel: Error clearing history visualizer: {e}")
+			finally:
+				self.history_visualizer = None
 
 	def on_select_mesh(self):
 		if self.main_window and self.main_window.sculpt_capture:
@@ -295,6 +313,7 @@ class SculptingPanel(QWidget):
 				<= original_index
 				< len(self.main_window.sculpt_capture.current_workflow.strokes)
 			):
+				self.clear_history_visualization()
 				self.main_window.sculpt_capture.delete_stroke(original_index)
 			else:
 				print(
@@ -306,10 +325,46 @@ class SculptingPanel(QWidget):
 		Handle the event when the stroke selection changes.
 		Updates the sample list based on the selected stroke.
 		"""
+		self.clear_history_visualization()  # Clear previous viz first
 		selected_indexes = self.stroke_list.selectedIndexes()
 		if selected_indexes:
 			print(selected_indexes[0].row())
 			self.update_sample_list(self.workflow.strokes[selected_indexes[0].row()])
+			self.delete_stroke_btn.setEnabled(True)
+
+			selected_row = selected_indexes[0].row()
+			if self.workflow:
+				selected_stroke = self.workflow.strokes[selected_row]
+
+				if selected_stroke and selected_stroke.samples:
+					try:
+						self.history_visualizer = StrokeVisualizer(
+							selected_stroke,
+							color=self.HISTORY_VIZ_COLOR,
+							transparency=self.HISTORY_VIZ_TRANSPARENCY,
+						)
+						viz_radius = (
+							selected_stroke.samples[0].size * 0.5
+							if selected_stroke.samples
+							else 0.2
+						)
+						self.history_visualizer.visualize(viz_radius, 8)
+					except ValueError as ve:
+						print(
+							f"SculptingPanel: Cannot visualize stroke {selected_row}: {ve}"
+						)
+						self.history_visualizer = None
+					except Exception as e:
+						print(
+							f"SculptingPanel: Error visualizing history stroke {selected_row}: {e}"
+						)
+						import traceback
+
+						traceback.print_exc()
+						self.history_visualizer = None
+		else:
+			self.delete_stroke_btn.setEnabled(False)
+			self.sample_list.setRowCount(0)
 
 	def select(self, index):
 		pass
@@ -318,6 +373,7 @@ class SculptingPanel(QWidget):
 		"""Clean up resources."""
 		print("SculptingPanel cleanup: Disconnecting signals.")
 
+		self.clear_history_visualization()
 		self.mesh_button.clicked.disconnect(self.on_select_mesh)
 		self.enable_capture.stateChanged.disconnect(self.on_enable_capture_changed)
 		self.stroke_list.itemSelectionChanged.disconnect(

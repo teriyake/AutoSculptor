@@ -382,11 +382,11 @@ class SculptCapture:
 						try:
 							visualizer = StrokeVisualizer(suggestion_stroke)
 							viz_radius = (
-								suggestion_stroke.samples[0].size
+								suggestion_stroke.samples[0].size * 0.5
 								if suggestion_stroke.samples
-								else 0.1
+								else 0.2
 							)
-							visualizer.visualize(0.2, 8)
+							visualizer.visualize(viz_radius, 8)
 							self.suggestion_visualizers.append(visualizer)
 						except Exception as viz_e:
 							print(
@@ -445,6 +445,8 @@ class SculptCapture:
 				MeshInterface.get_mesh_data(self.mesh_name),
 				5,
 				100.0,
+				None,
+				0.2,
 			)
 			if suggestion:
 				self.current_suggestions = [suggestion]

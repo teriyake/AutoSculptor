@@ -4,16 +4,26 @@ import maya.cmds as cmds  # type: ignore
 
 
 class StrokeVisualizer:
-	def __init__(self, stroke):
+	DEFAULT_COLOR = (1.0, 1.0, 0.0)
+	DEFAULT_TRANSPARENCY = (0.8, 0.8, 0.8)
+
+	def __init__(self, stroke, color=None, transparency=None):
 		"""
 		Initialize the StrokeVisualizer with a Stroke object.
 
 		Args:
 			stroke (Stroke): The stroke to visualize.
+			color (tuple, optional): RGB color tuple (e.g., (1.0, 0.0, 0.0) for red). Defaults to yellow.
+			transparency (tuple, optional): RGB transparency tuple (e.g., (0.5, 0.5, 0.5)). Defaults to semi-transparent.
 		"""
 		self.stroke = stroke
 		# Track all nodes created by this instance so that we can free up resources later
 		self.created_nodes = []
+
+		viz_color = color if color is not None else self.DEFAULT_COLOR
+		viz_transparency = (
+			transparency if transparency is not None else self.DEFAULT_TRANSPARENCY
+		)
 
 		# Create a new shader for visualization
 		self.shader = cmds.shadingNode(
@@ -29,10 +39,22 @@ class StrokeVisualizer:
 		)
 
 		# Set the color to yellow
-		cmds.setAttr(self.shader + ".color", 1.0, 1.0, 0.0, type="double3")
+		cmds.setAttr(
+			self.shader + ".color",
+			viz_color[0],
+			viz_color[1],
+			viz_color[2],
+			type="double3",
+		)
 
 		# Set transparency to make the material semi-transparent
-		cmds.setAttr(self.shader + ".transparency", 0.8, 0.8, 0.8, type="double3")
+		cmds.setAttr(
+			self.shader + ".transparency",
+			viz_transparency[0],
+			viz_transparency[1],
+			viz_transparency[2],
+			type="double3",
+		)
 
 	def create_curve_from_stroke(self):
 		"""
@@ -54,7 +76,7 @@ class StrokeVisualizer:
 			curve = cmds.curve(p=curve_points, d=1)  # Linear curve for fewer points
 		else:
 			curve = cmds.curve(p=curve_points, d=3)  # Cubic curve
-		cmds.fitBspline(ch=0, tol=0.01)
+		# cmds.fitBspline(ch=0, tol=0.01)
 
 		return curve
 
