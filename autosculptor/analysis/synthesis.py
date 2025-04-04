@@ -34,6 +34,33 @@ def rotate_vector(vector: np.ndarray, axis_angle: np.ndarray) -> np.ndarray:
 	return rotated
 
 
+def slerp(v0: np.ndarray, v1: np.ndarray, t: float) -> np.ndarray:
+	v0_n = v0 / (np.linalg.norm(v0) + 1e-9)
+	v1_n = v1 / (np.linalg.norm(v1) + 1e-9)
+
+	dot = np.dot(v0_n, v1_n)
+	dot = np.clip(dot, -1.0, 1.0)
+
+	if abs(dot) > 0.9995:
+		result = (1 - t) * v0_n + t * v1_n
+		return result / (np.linalg.norm(result) + 1e-9)
+
+	theta_0 = np.arccos(dot)
+	theta = theta_0 * t
+
+	sin_theta = np.sin(theta_0)
+	if abs(sin_theta) < 1e-9:
+		return v0_n
+
+	sin_theta_inv = 1.0 / sin_theta
+
+	w0 = np.sin((1.0 - t) * theta_0) * sin_theta_inv
+	w1 = np.sin(t * theta_0) * sin_theta_inv
+
+	result = w0 * v0_n + w1 * v1_n
+	return result / (np.linalg.norm(result) + 1e-9)
+
+
 class StrokeSynthesizer:
 	def __init__(self, mesh_data: MeshData):
 		self.mesh_data = mesh_data
@@ -749,16 +776,49 @@ class StrokeSynthesizer:
 						target_press,
 						target_curve,
 					) = target_world_updates[idx_bo]
-					s_bo.position = (
+
+					#s_bo.position = (
+						#1 - optimization_alpha
+					#) * s_bo.position + optimization_alpha * target_pos
+
+					interpolated_pos_linear = (
 						1 - optimization_alpha
 					) * s_bo.position + optimization_alpha * target_pos
 
-					interp_norm = (
-						1 - optimization_alpha
-					) * s_bo.normal + optimization_alpha * target_norm
-					norm_mag = np.linalg.norm(interp_norm)
-					if norm_mag > 1e-6:
-						s_bo.normal = interp_norm / norm_mag
+					final_interpolated_pos = interpolated_pos_linear
+					final_interpolated_norm = None
+
+					closest_point_data_interp = MeshInterface.find_closest_point(
+						self.parameterizer.mesh_data, interpolated_pos_linear
+					)
+					if (
+						closest_point_data_interp
+						and closest_point_data_interp[0] is not None
+					):
+						final_interpolated_pos = np.array(closest_point_data_interp[0])
+						projected_normal = np.array(closest_point_data_interp[1])
+						norm_mag_proj = np.linalg.norm(projected_normal)
+						if norm_mag_proj > 1e-6:
+							final_interpolated_norm = projected_normal / norm_mag_proj
+						else:
+							final_interpolated_norm = None
+					else:
+						final_interpolated_pos = interpolated_pos_linear
+
+					s_bo.position = final_interpolated_pos
+
+					if final_interpolated_norm is not None:
+						s_bo.normal = final_interpolated_norm
+					else:
+						norm_s_bo = np.linalg.norm(s_bo.normal) if s_bo.normal is not None else 0
+						norm_target = np.linalg.norm(target_norm) if target_norm is not None else 0
+						if norm_s_bo > 1e-6 and norm_target > 1e-6 :
+							try:
+								s_bo.normal = slerp(s_bo.normal, target_norm, optimization_alpha)
+							except Exception as e:
+								print(f"  Warning: SLERP failed for sample {idx_bo}: {e}. Keeping original normal.")
+						else:
+							pass
 
 					s_bo.size = max(
 						0.01,
