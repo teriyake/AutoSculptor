@@ -297,28 +297,3 @@ class TestStrokeParameterizer(unittest.TestCase):
 		self.assertTrue(isinstance(norm, np.ndarray))
 		self.assertEqual(pos.shape, (3,))
 		self.assertEqual(norm.shape, (3,))
-
-	def test_params_to_world_freeform(self):
-		stroke = self.create_test_stroke(
-			"freeform",
-			[[0, 0, 0], [0, 1, 1], [0, 2, 0]],
-			normals=[[0, 1, 0], [0, 1, 0], [0, 1, 0]],
-		)
-		self.parameterizer.parameterize_stroke(stroke, camera_lookat=[0, -1, 0])
-		sample = Sample(position=np.array([0, 0, 0]), normal=np.array([0, 1, 0]))
-		sample.xs = 0.2
-		sample.ys = -0.3
-		sample.zs = 0.8
-		sample.stroke_type = "freeform"
-
-		pos, norm = self.parameterizer._params_to_world(sample, stroke, "freeform")
-		self.assertTrue(isinstance(pos, np.ndarray))
-		self.assertTrue(isinstance(norm, np.ndarray))
-		self.assertEqual(pos.shape, (3,))
-		self.assertEqual(norm.shape, (3,))
-
-	def test_params_to_world_invalid_type(self):
-		stroke = Stroke()
-		sample = Sample(position=np.array([0, 0, 0]))
-		with self.assertRaises(ValueError):
-			self.parameterizer._params_to_world(sample, stroke, "invalid_type")

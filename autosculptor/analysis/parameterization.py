@@ -95,10 +95,19 @@ class StrokeParameterizer:
 				brush_radius = sample.size if sample.size > 1e-6 else 1.0
 				sample.ds = np.clip(signed_geodesic_dist / brush_radius, -1.0, 1.0)
 
-				# print(f"Sample {i}: ts={sample.ts:.3f}, path_pos={position_on_path}, tangent={tangent_on_path}, normal={normal_on_path}")
-				# print(f"          sample_pos={sample.position}, offset_vec={offset_vector}")
-				# print(f"          perp_dir={perp_direction}, dot_prod={projected_offset_component}, sign={sign}")
-				# print(f"          geo_dist={geodesic_dist_mag:.4f}, signed_geo_dist={signed_geodesic_dist:.4f}, brush_radius={brush_radius:.4f}, final_ds={sample.ds:.4f}")
+				# print("_______normalize_stroke_parameters_______")
+				# print(
+				# f"Sample {i}: ts={sample.ts:.3f}, path_pos={position_on_path}, tangent={tangent_on_path}, normal={normal_on_path}"
+				# )
+				# print(
+				# f"          sample_pos={sample.position}, offset_vec={offset_vector}"
+				# )
+				# print(
+				# f"          perp_dir={perp_direction}, dot_prod={projected_offset_component}, sign={sign}"
+				# )
+				# print(
+				# f"          geo_dist={geodesic_dist_mag:.4f}, signed_geo_dist={signed_geodesic_dist:.4f}, brush_radius={brush_radius:.4f}, final_ds={sample.ds:.4f}"
+				# )
 
 		for i, sample in enumerate(stroke.samples):
 			sample.zs = (
@@ -177,6 +186,9 @@ class StrokeParameterizer:
 		if not stroke.samples:
 			return np.array([0.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0])
 
+		# print("_______inverse_parameterize_surface_______")
+		# print(f"Input: ts={ts} ds={ds}")
+
 		(
 			position_on_stroke,
 			normal_on_stroke,
@@ -198,30 +210,66 @@ class StrokeParameterizer:
 		else:
 			perpendicular_direction /= perp_norm
 
-		world_offset = ds * original_sample.size
+		world_offset = abs(ds) * original_sample.size
 		target_pos_initial = position_on_stroke + perpendicular_direction * world_offset
+
+		# print(f"  InverseParam: initial_pos (before projection)={target_pos_initial}")
+		# print(
+		# f"  InverseParam: normal_on_stroke (before projection)={normal_on_stroke}"
+		# )
 
 		final_position = target_pos_initial
 		final_normal = normal_on_stroke
+		offset_direction_initial = perpendicular_direction * np.sign(ds + 1e-9)
 
 		if self.mesh_data and self.mesh_data.maya_mesh_fn:
 			from autosculptor.core.mesh_interface import MeshInterface
 
 			closest_pt_data = MeshInterface.find_closest_point(
-				self.mesh_data, target_pos_initial
+				self.mesh_data, position_on_stroke
 			)
 			if closest_pt_data and closest_pt_data[0] is not None:
-				final_position = np.array(closest_pt_data[0])
-				final_normal = np.array(closest_pt_data[1])
-				norm_mag = np.linalg.norm(final_normal)
+				closest_mesh_point_ts = np.array(closest_pt_data[0], dtype=np.float64)
+				mesh_normal_ts = np.array(closest_pt_data[1], dtype=np.float64)
+				norm_mag = np.linalg.norm(mesh_normal_ts)
 				if norm_mag > 1e-6:
-					final_normal /= norm_mag
+					mesh_normal_ts /= norm_mag
 				else:
-					final_normal = normal_on_stroke
-				print(f"  InverseParam: final_pos (projected)={final_position}")
-				print(f"  InverseParam: final_normal (projected)={final_normal}")
+					mesh_normal_ts = normal_on_stroke
 		else:
 			print(f"  InverseParam: Error getting mesh data for projection.")
+			closest_mesh_point_ts = position_on_stroke
+			mesh_normal_ts = normal_on_stroke
+
+		dot_prod = np.dot(offset_direction_initial, mesh_normal_ts)
+		projected_direction_unnormalized = (
+			offset_direction_initial - dot_prod * mesh_normal_ts
+		)
+
+		proj_norm = np.linalg.norm(projected_direction_unnormalized)
+
+		if proj_norm < 1e-6:
+			final_position = closest_mesh_point_ts
+			final_normal = mesh_normal_ts
+			# print(f"    Initial offset dir: {offset_direction_initial}, Mesh normal: {mesh_normal_ts}")
+		else:
+			projected_direction_normalized = (
+				projected_direction_unnormalized / proj_norm
+			)
+
+			final_position = (
+				closest_mesh_point_ts + projected_direction_normalized * world_offset
+			)
+			final_normal = mesh_normal_ts
+
+			# print(f"  InverseParam(Proj): ts={ts:.3f}, ds={ds:.3f}")
+			# print(f"    Ref Pos: {position_on_ref_stroke}")
+			# print(f"    Initial Offset Dir: {offset_direction_initial}")
+			# print(f"    Anchor Mesh Pt: {closest_mesh_point_ts}")
+			# print(f"    Mesh Normal @ Anchor: {mesh_normal_ts}")
+			# print(f"    Projected Dir (norm): {projected_direction_normalized}")
+			# print(f"    Offset Mag: {world_offset_magnitude:.4f}")
+			# print(f"    Final Pos: {final_position}")
 
 		return final_position, final_normal
 
