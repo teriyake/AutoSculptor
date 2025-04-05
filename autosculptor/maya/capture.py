@@ -11,6 +11,9 @@ from autosculptor.analysis.parameterization import StrokeParameterizer
 from autosculptor.suggestions.visualization import StrokeVisualizer
 from autosculptor.analysis.geodesic_calculator import CachedGeodesicCalculator
 from autosculptor.maya.utils import get_active_camera_lookat_vector
+from autosculptor.core.brush import BrushMode
+from autosculptor.core.surface_brush import SurfaceBrush
+from autosculptor.core.freeform_brush import FreeformBrush
 
 
 class SculptCapture:
@@ -33,6 +36,8 @@ class SculptCapture:
 		self.update_suggestion_callback = update_suggestion_callback
 		self.is_capturing = False
 		self.suggestions_enabled = False
+		self.preview_enabled = False
+		self.previewing_suggestion_index: Optional[int] = None
 
 		self.is_user_actively_sculpting = False
 		self.active_stroke_in_progress: Optional[Stroke] = None
@@ -616,6 +621,166 @@ class SculptCapture:
 		elif enabled and self.is_capturing and len(self.current_workflow.strokes) > 1:
 			self.generate_suggestions()
 			self.visualize_suggestions()
+
+	def accept_selected_suggestion(self, suggestion_index: int):
+		"""Applies the selected suggestion stroke to the mesh."""
+		if not self.is_capturing:
+			om2.MGlobal.displayWarning(
+				"Cannot accept suggestion: Capture is not active."
+			)
+			return
+		if not self.mesh_name or not cmds.objExists(self.mesh_name):
+			om2.MGlobal.displayError("Cannot accept suggestion: Target mesh not found.")
+			return
+		if suggestion_index < 0 or suggestion_index >= len(self.current_suggestions):
+			om2.MGlobal.displayWarning(f"Invalid suggestion index: {suggestion_index}")
+			return
+
+		accepted_stroke = self.current_suggestions[suggestion_index]
+		if not accepted_stroke or not accepted_stroke.samples:
+			om2.MGlobal.displayWarning("Selected suggestion is empty or invalid.")
+			return
+
+		# print(f"SculptCapture: Accepting suggestion index {suggestion_index}...")
+
+		try:
+			mesh_data = MeshInterface.get_mesh_data(self.mesh_name)
+			if not mesh_data:
+				om2.MGlobal.displayError("Failed to get mesh data for applying stroke.")
+				return
+
+			cmds.undoInfo(openChunk=True, chunkName="AcceptSelectedAutoSculptorSuggestion")
+			undo_chunk_is_open = True
+
+			brush_class = None
+			if accepted_stroke.stroke_type == "surface":
+				brush_class = SurfaceBrush
+			elif accepted_stroke.stroke_type == "freeform":
+				brush_class = FreeformBrush
+			else:
+				if undo_chunk_is_open:
+					cmds.undoInfo(closeChunk=True)
+					undo_chunk_is_open = False
+				raise ValueError(
+					f"Unknown stroke type for accepted suggestion: {accepted_stroke.stroke_type}"
+				)
+
+			brush = brush_class(
+				size=accepted_stroke.brush_size or 1.0,
+				strength=accepted_stroke.brush_strength or 0.5,
+				mode=BrushMode[accepted_stroke.brush_mode]
+				if accepted_stroke.brush_mode
+				else BrushMode.ADD,
+				falloff="linear",
+			)
+			print(
+				f"  Applying using Brush: {brush_class.__name__}, Size: {brush.size:.2f}, Strength: {brush.strength:.2f}, Mode: {brush.mode.name}"
+			)
+
+			apply_success = True
+			for i, sample in enumerate(accepted_stroke.samples):
+				print(
+					f"  Applying sample {i+1}/{len(accepted_stroke.samples)} at {sample.position}"
+				)
+				try:
+					brush.apply_to_mesh(mesh_data, sample)
+				except Exception as apply_err:
+					print(f"  Error applying sample {i}: {apply_err}")
+					apply_success = False
+					break
+
+			if not apply_success:
+				cmds.undoInfo(closeChunk=True)
+				cmds.undo()
+				om2.MGlobal.displayError(
+					"Failed to apply accepted stroke. Operation cancelled and undone."
+				)
+				return
+
+			print("  Stroke application complete.")
+
+			final_mesh_data = MeshInterface.get_mesh_data(self.mesh_name)
+			if final_mesh_data and self.synthesizer and self.synthesizer.parameterizer:
+				self._ensure_synthesizer_mesh(final_mesh_data)
+				camera_lookat = get_active_camera_lookat_vector()
+				print("  Parameterizing accepted stroke...")
+				self.synthesizer.parameterizer.parameterize_stroke(
+					accepted_stroke, camera_lookat
+				)
+			else:
+				print("  Warning: Could not re-parameterize accepted stroke.")
+
+			self.current_workflow.add_stroke(accepted_stroke)
+			self.previous_positions[self.mesh_name] = (
+				final_mesh_data.vertices if final_mesh_data else mesh_data.vertices
+			)
+
+			self.current_suggestions.pop(suggestion_index)
+			self.clear_suggestion_visualizers()
+
+			if self.update_history_callback:
+				self.update_history_callback(self.copy_workflow())
+			if self.update_suggestion_callback:
+				suggestion_workflow = Workflow()
+				suggestion_workflow.strokes = list(self.current_suggestions)
+				self.update_suggestion_callback(suggestion_workflow)
+
+			# self.generate_suggestions()
+
+			if undo_chunk_is_open:
+				cmds.undoInfo(closeChunk=True)
+				undo_chunk_is_open = False
+
+		except Exception as e:
+			print(f"Critical Error during accept_suggestion: {e}")
+			import traceback
+
+			traceback.print_exc()
+			if undo_chunk_is_open:
+				try:
+					cmds.undoInfo(closeChunk=True)
+					undo_chunk_is_open = False
+					print("Attempting undo due to critical error...")
+					if not cmds.undoInfo(q=True, undoQueueEmpty=True):
+						cmds.undo()
+				except Exception as final_close_err:
+					print(f"Error closing undo chunk: {final_close_err}")
+
+	def accept_all_suggestions(self):
+		if not self.is_capturing:
+			om2.MGlobal.displayWarning(
+				"Cannot accept suggestions: Capture is not active."
+			)
+			return
+		if not self.current_suggestions:
+			om2.MGlobal.displayInfo("No suggestions available to accept.")
+			return
+
+		num_to_accept = len(self.current_suggestions)
+		print(f"SculptCapture: Accepting all {num_to_accept} suggestions...")
+
+		cmds.undoInfo(openChunk=True, chunkName="AcceptAllAutoSculptorSuggestions")
+		try:
+			accepted_count = 0
+			original_indices = list(range(num_to_accept))
+
+			for i in range(num_to_accept):
+				self.accept_suggestion(0)
+				if not self.mesh_name or not cmds.objExists(self.mesh_name):
+					print("  Mesh became invalid during 'Accept All'. Aborting.")
+					break
+				accepted_count += 1
+
+			print(f"SculptCapture: Finished accepting {accepted_count} suggestions.")
+
+		except Exception as e:
+			print(f"Error during accept_all_suggestions: {e}")
+			import traceback
+
+			traceback.print_exc()
+		finally:
+			if cmds.undoInfo(q=True, open=True):
+				cmds.undoInfo(closeChunk=True)
 
 	def cleanup(self):
 		self.stop_capture()

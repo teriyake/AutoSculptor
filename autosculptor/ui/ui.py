@@ -447,6 +447,8 @@ class SuggestionPanel(QWidget):
 		self.accept_sel_btn = QPushButton("Accept Selected")
 		self.accept_all_btn = QPushButton("Accept All")
 		self.recompute_btn = QPushButton("Recompute")
+		self.accept_sel_btn.clicked.connect(self.on_accept_sel_clicked)
+		self.accept_all_btn.clicked.connect(self.on_accept_all_clicked)
 		button_layout.addWidget(self.accept_sel_btn)
 		button_layout.addWidget(self.accept_all_btn)
 		button_layout.addWidget(self.recompute_btn)
@@ -555,6 +557,32 @@ class SuggestionPanel(QWidget):
 			om2.MGlobal.displayWarning(  # type: ignore
 				"Cannot recompute: Capture system not initialized."
 			)
+
+	def on_accept_sel_clicked(self):
+		selection_index = self.stroke_list.selectedIndexes()[0].row()
+		if (
+			selection_index != -1
+			and self.main_window
+			and self.main_window.sculpt_capture
+		):
+			print(f"SuggestionPanel: Accepting suggestion index {selection_index}")
+			self.main_window.sculpt_capture.accept_selected_suggestion(selection_index)
+		else:
+			print("SuggestionPanel: No suggestion selected or capture inactive.")
+
+	def on_accept_all_clicked(self):
+		if (
+			self.workflow
+			and len(self.workflow.strokes) > 0
+			and self.main_window
+			and self.main_window.sculpt_capture
+		):
+			print(
+				f"SuggestionPanel: Accepting all {len(self.workflow.strokes)} suggestions."
+			)
+			self.main_window.sculpt_capture.accept_all_suggestions()
+		else:
+			print("SuggestionPanel: No suggestions to accept or capture inactive.")
 
 	def cleanup(self):
 		"""Clean up resources."""

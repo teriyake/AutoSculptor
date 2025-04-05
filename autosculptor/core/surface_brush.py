@@ -49,18 +49,13 @@ class SurfaceBrush(Brush):
 			print("Warning: Maya mesh function not available.")
 			return
 
-		print(f"Type of mesh_data: {type(mesh_data)}")
-		print(f"Type of sample: {type(sample)}")
-
 		brush_position = sample.position
 		brush_size = self.size * sample.size
-		brush_strength = self.strength * sample.pressure
+		# brush_strength = self.strength * sample.pressure
+		brush_strength = self.strength * 100.0
 		affected_vertices_indices = []
 		affected_vertices_local_positions = []
 
-		print(f"Sample size: {sample.size}")
-
-		print("Starting to check vertex distance... ")
 		for i, vertex in enumerate(mesh_data.vertices):
 			vertex_pos = np.array(vertex)
 			distance = np.linalg.norm(vertex_pos - brush_position)

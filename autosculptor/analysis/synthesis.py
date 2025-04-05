@@ -777,9 +777,9 @@ class StrokeSynthesizer:
 						target_curve,
 					) = target_world_updates[idx_bo]
 
-					#s_bo.position = (
-						#1 - optimization_alpha
-					#) * s_bo.position + optimization_alpha * target_pos
+					# s_bo.position = (
+					# 1 - optimization_alpha
+					# ) * s_bo.position + optimization_alpha * target_pos
 
 					interpolated_pos_linear = (
 						1 - optimization_alpha
@@ -810,13 +810,25 @@ class StrokeSynthesizer:
 					if final_interpolated_norm is not None:
 						s_bo.normal = final_interpolated_norm
 					else:
-						norm_s_bo = np.linalg.norm(s_bo.normal) if s_bo.normal is not None else 0
-						norm_target = np.linalg.norm(target_norm) if target_norm is not None else 0
-						if norm_s_bo > 1e-6 and norm_target > 1e-6 :
+						norm_s_bo = (
+							np.linalg.norm(s_bo.normal)
+							if s_bo.normal is not None
+							else 0
+						)
+						norm_target = (
+							np.linalg.norm(target_norm)
+							if target_norm is not None
+							else 0
+						)
+						if norm_s_bo > 1e-6 and norm_target > 1e-6:
 							try:
-								s_bo.normal = slerp(s_bo.normal, target_norm, optimization_alpha)
+								s_bo.normal = slerp(
+									s_bo.normal, target_norm, optimization_alpha
+								)
 							except Exception as e:
-								print(f"  Warning: SLERP failed for sample {idx_bo}: {e}. Keeping original normal.")
+								print(
+									f"  Warning: SLERP failed for sample {idx_bo}: {e}. Keeping original normal."
+								)
 						else:
 							pass
 
