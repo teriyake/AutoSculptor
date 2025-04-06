@@ -1,8 +1,5 @@
 import sys
 import os
-from autosculptor.utils.utils import Utils
-from autosculptor.maya.test_ui import TestUI
-from autosculptor.maya.viewport_drawer import SuggestionDrawer
 
 try:
 	import maya.cmds as cmds  # type: ignore
@@ -16,8 +13,24 @@ from autosculptor.core.surface_brush import SurfaceBrush
 from autosculptor.core.freeform_brush import FreeformBrush
 from autosculptor.core.brush import BrushMode
 from autosculptor.core.mesh_interface import MeshInterface
+from autosculptor.utils.utils import Utils
+from autosculptor.maya.test_ui import TestUI
+from autosculptor.maya.viewport_drawer import SuggestionDrawer
 
 CMD_AUTO_SCULPTOR_TEST = om.MTypeId(0x8723)
+
+COMMAND_CATEGORY = "AutoSculptor"
+TOGGLE_CAPTURE_CMD_NAME = "autoSculptorToggleCaptureCmd"
+TOGGLE_SUGGESTIONS_CMD_NAME = "autoSculptorToggleSuggestionsCmd"
+ACCEPT_SELECTED_CMD_NAME = "autoSculptorAcceptSelectedCmd"
+ACCEPT_ALL_CMD_NAME = "autoSculptorAcceptAllCmd"
+
+NAMED_COMMANDS = [
+	TOGGLE_CAPTURE_CMD_NAME,
+	TOGGLE_SUGGESTIONS_CMD_NAME,
+	ACCEPT_SELECTED_CMD_NAME,
+	ACCEPT_ALL_CMD_NAME,
+]
 
 
 class AutoSculptorTestCmd(OpenMayaMPx.MPxCommand):
@@ -233,7 +246,7 @@ class AutoSculptorDrawNode(OpenMayaMPx.MPxLocatorNode):
 
 
 def show_sculpting_tool_window_action():
-	window_name = "autoSculptingToolWindow"
+	window_name = "AutoSculptorToolWindow"
 	if cmds.window(window_name, q=True, exists=True):
 		cmds.deleteUI(window_name, window=True)
 
@@ -292,10 +305,13 @@ def initializePlugin(mobject):
 		create_menu()
 
 		om.MGlobal.displayInfo(
-			"AutoSculptor plugin loaded, command and draw override registered!"
+			"AutoSculptor plugin loaded. UI, commands, and hotkeys registered!"
 		)
 	except Exception as e:
-		sys.stderr.write(f"Failed to register command or draw override: {e}\n")
+		sys.stderr.write(f"Failed to initialize AutoSculptor: {e}\n")
+		import traceback
+
+		traceback.print_exc()
 		# raise
 
 
@@ -311,6 +327,11 @@ def uninitializePlugin(mobject):
 		)
 		cmds.deleteUI("AutoSculptorMenu", menu=True)
 
+		om.MGlobal.displayInfo("AutoSculptor plugin unloaded.")
+
 	except Exception as e:
-		sys.stderr.write(f"Failed to deregister command or draw override: {e}\n")
+		sys.stderr.write(f"Failed to clean up AutoSculptor: {e}\n")
+		import traceback
+
+		traceback.print_exc()
 		# raise

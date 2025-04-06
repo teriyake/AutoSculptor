@@ -43,6 +43,8 @@ class SculptCapture:
 		self.active_stroke_in_progress: Optional[Stroke] = None
 		self.last_change_time: float = 0.0
 
+		self.clone_preview_visualizer: Optional[StrokeVisualizer] = None
+
 	def get_world_space_positions(self, mesh_name):
 		"""Gets world-space vertex positions for a mesh by name."""
 		try:
@@ -524,6 +526,7 @@ class SculptCapture:
 				if self.mesh_name in self.previous_positions:
 					del self.previous_positions[self.mesh_name]
 				self.clear_suggestions()
+				self.clear_clone_preview_visualization()
 				print("Capture stopped.")
 		else:
 			print("Capture not running.")
@@ -560,6 +563,10 @@ class SculptCapture:
 			for viz in self.suggestion_visualizers:
 				viz.clear()
 			self.suggestion_visualizers.clear()
+
+	def clear_clone_preview_visualization(self):
+		if self.clone_preview_visualizer:
+			self.clone_preview_visualizer.clear()
 
 	def clear_suggestions(self):
 		"""Clears the current suggestion strokes and updates the UI."""
@@ -649,7 +656,9 @@ class SculptCapture:
 				om2.MGlobal.displayError("Failed to get mesh data for applying stroke.")
 				return
 
-			cmds.undoInfo(openChunk=True, chunkName="AcceptSelectedAutoSculptorSuggestion")
+			cmds.undoInfo(
+				openChunk=True, chunkName="AcceptSelectedAutoSculptorSuggestion"
+			)
 			undo_chunk_is_open = True
 
 			brush_class = None
@@ -782,7 +791,123 @@ class SculptCapture:
 			if cmds.undoInfo(q=True, open=True):
 				cmds.undoInfo(closeChunk=True)
 
+	def apply_cloned_stroke(self, cloned_stroke: Stroke):
+		"""
+		Applies a validated cloned stroke to the mesh and adds it to history.
+		"""
+		if not self.is_capturing:
+			raise RuntimeError("Cannot apply clone: Capture is not active.")
+		if not self.mesh_name or not cmds.objExists(self.mesh_name):
+			raise RuntimeError("Cannot apply clone: Target mesh not found.")
+		if not cloned_stroke or not cloned_stroke.samples:
+			raise ValueError("Cannot apply clone: Cloned stroke is invalid or empty.")
+
+		print(
+			f"SculptCapture: Applying cloned stroke with {len(cloned_stroke.samples)} samples..."
+		)
+
+		try:
+			mesh_data = MeshInterface.get_mesh_data(self.mesh_name)
+			if not mesh_data:
+				raise RuntimeError(
+					"Failed to get mesh data for applying cloned stroke."
+				)
+
+			cmds.undoInfo(openChunk=True, chunkName="ApplyAutoSculptorClone")
+			undo_chunk_is_open = True
+
+			brush_class = None
+			if cloned_stroke.stroke_type == "surface":
+				brush_class = SurfaceBrush
+			elif cloned_stroke.stroke_type == "freeform":
+				brush_class = FreeformBrush
+			else:
+				if undo_chunk_is_open:
+					cmds.undoInfo(closeChunk=True)
+				raise ValueError(
+					f"Unknown stroke type for cloned stroke: {cloned_stroke.stroke_type}"
+				)
+
+			brush = brush_class(
+				size=cloned_stroke.brush_size or 1.0,
+				strength=cloned_stroke.brush_strength or 0.5,
+				mode=BrushMode[cloned_stroke.brush_mode]
+				if cloned_stroke.brush_mode
+				else BrushMode.ADD,
+				falloff=cloned_stroke.brush_falloff or "smooth",
+			)
+			# print(
+			# f"  Applying using Brush: {brush_class.__name__}, Size: {brush.size:.2f}, Strength: {brush.strength:.2f}, Mode: {brush.mode.name}, Falloff: {brush.falloff}"
+			# )
+
+			apply_success = True
+			num_applied = 0
+			for i, sample in enumerate(cloned_stroke.samples):
+				# print(f"  Applying sample {i+1}/{len(cloned_stroke.samples)} at {sample.position}") # Verbose
+				try:
+					brush.apply_to_mesh(mesh_data, sample)
+					num_applied += 1
+				except Exception as apply_err:
+					print(f"  Error applying cloned sample {i}: {apply_err}")
+					# apply_success = False
+					# break
+					print("   Skipping sample and attempting to continue...")
+
+			print(f"  Applied {num_applied} samples from cloned stroke.")
+
+			final_mesh_data = MeshInterface.get_mesh_data(self.mesh_name)
+			if final_mesh_data and self.synthesizer and self.synthesizer.parameterizer:
+				self._ensure_synthesizer_mesh(final_mesh_data)
+				camera_lookat = get_active_camera_lookat_vector()
+				# print("  Parameterizing applied clone stroke...")
+				try:
+					self.synthesizer.parameterizer.parameterize_stroke(
+						cloned_stroke, camera_lookat
+					)
+				except Exception as param_err:
+					print(
+						f"  Warning: Failed to parameterize applied clone stroke: {param_err}"
+					)
+			else:
+				print(
+					"  Warning: Could not re-parameterize applied clone stroke (missing synthesizer/parameterizer)."
+				)
+
+			self.current_workflow.add_stroke(cloned_stroke)
+			self.previous_positions[self.mesh_name] = (
+				final_mesh_data.vertices if final_mesh_data else mesh_data.vertices
+			)
+
+			if self.update_history_callback:
+				self.update_history_callback(self.copy_workflow())
+
+			if self.suggestions_enabled:
+				# print("  Regenerating suggestions after clone application...")
+				self.generate_suggestions()
+
+			if undo_chunk_is_open:
+				cmds.undoInfo(closeChunk=True)
+				undo_chunk_is_open = False
+			print("SculptCapture: Clone application successful.")
+
+		except Exception as e:
+			print(f"SculptCapture: Critical Error during apply_cloned_stroke: {e}")
+			import traceback
+
+			traceback.print_exc()
+			if undo_chunk_is_open:
+				try:
+					cmds.undoInfo(closeChunk=True)
+					print("Attempting undo due to critical error...")
+					if not cmds.undoInfo(q=True, undoQueueEmpty=True):
+						cmds.undo()
+				except Exception as final_close_err:
+					print(f"Error closing undo chunk: {final_close_err}")
+			raise
+
 	def cleanup(self):
 		self.stop_capture()
 		self.clear_suggestions()
+		self.clear_clone_preview_visualization()
+		self.synthesizer = None
 		print("SculptCapture cleaned up.")

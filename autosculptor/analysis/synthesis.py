@@ -1,8 +1,10 @@
 import time
 import copy
+import math
 import numpy as np
 from typing import List, Dict, Tuple, Optional
 from scipy.optimize import linear_sum_assignment
+from scipy.spatial.transform import Rotation as R
 from autosculptor.core.data_structures import Stroke, Sample, Workflow
 from autosculptor.core.mesh_interface import MeshData, MeshInterface
 from autosculptor.analysis.parameterization import StrokeParameterizer
@@ -70,6 +72,29 @@ class StrokeSynthesizer:
 			self.parameterizer = StrokeParameterizer(mesh_data)
 		else:
 			print("Warning: StrokeSynthesizer created without valid mesh data")
+
+	def _calculate_rotation_between_normals(self, normal_source, normal_target):
+		"""
+		Calculates the rotation needed to align normal_source with normal_target.
+		"""
+		n_src = normal_source / (np.linalg.norm(normal_source) + 1e-9)
+		n_tgt = normal_target / (np.linalg.norm(normal_target) + 1e-9)
+
+		dot_product = np.dot(n_src, n_tgt)
+
+		if np.isclose(dot_product, 1.0):
+			return R.identity()
+		if np.isclose(dot_product, -1.0):
+			axis = np.cross(n_src, np.array([1.0, 0.0, 0.0]))
+			if np.linalg.norm(axis) < 1e-6:
+				axis = np.cross(n_src, np.array([0.0, 1.0, 0.0]))
+			axis /= np.linalg.norm(axis) + 1e-9
+			return R.from_rotvec(axis * math.pi)
+
+		axis = np.cross(n_src, n_tgt)
+		angle = np.arccos(dot_product)
+		axis /= np.linalg.norm(axis) + 1e-9
+		return R.from_rotvec(axis * angle)
 
 	def _update_parameterizer_mesh(self, mesh_data: MeshData):
 		"""Updates the mesh data used by the internal parameterizer."""
@@ -970,3 +995,337 @@ class StrokeSynthesizer:
 			return None
 
 		return optimized_stroke
+
+	def clone_workflow(
+		self,
+		source_strokes: List[Stroke],
+		source_anchor_pos: np.ndarray,
+		source_anchor_normal: np.ndarray,
+		target_anchor_pos: np.ndarray,
+		target_anchor_normal: np.ndarray,
+		target_mesh_data: MeshData,
+		scale_factor: float = 1.0,
+	) -> Optional[Workflow]:
+		"""
+		Clones a list of source strokes to a target location and orientation.
+
+		Args:
+			source_strokes: List of Stroke objects to clone.
+			source_anchor_pos: 3D position of the source anchor.
+			source_anchor_normal: Normal vector at the source anchor.
+			target_anchor_pos: 3D position of the target anchor.
+			target_anchor_normal: Normal vector at the target anchor.
+			target_mesh_data: The MeshData representing the current state of the
+							  mesh where the clone will be placed.
+			scale_factor: Optional scaling factor for stroke size/attributes.
+
+		Returns:
+			A new Workflow object containing the cloned strokes, or None if cloning fails.
+		"""
+		print("\n--- Starting Workflow Cloning ---")
+		if not source_strokes:
+			print("Clone Error: No source strokes provided.")
+			return None
+		if not self.parameterizer:
+			print("Clone Error: StrokeParameterizer not initialized.")
+			return None
+		if not target_mesh_data or not hasattr(target_mesh_data, "vertices"):
+			print("Clone Error: Invalid target mesh data provided.")
+			return None
+
+		self._update_parameterizer_mesh(target_mesh_data)
+		if not self.parameterizer:
+			print("Clone Error: Parameterizer failed to initialize/update.")
+			return None
+
+		translation = target_anchor_pos - source_anchor_pos
+		try:
+			rotation = self._calculate_rotation_between_normals(
+				source_anchor_normal, target_anchor_normal
+			)
+			rotation_matrix = rotation.as_matrix()
+			print(f"  Translation: {translation}")
+			print(f"  Rotation Axis/Angle: {rotation.as_rotvec()}")
+		except Exception as e:
+			print(f"Clone Error: Failed to calculate rotation: {e}")
+			return None
+
+		cloned_workflow = Workflow()
+		last_cloned_sample: Optional[Sample] = None
+		last_source_sample: Optional[Sample] = None
+
+		for stroke_idx, source_stroke in enumerate(source_strokes):
+			if not source_stroke.samples:
+				print(f"  Skipping empty source stroke {stroke_idx}.")
+				continue
+
+			print(f"\n  Cloning stroke {stroke_idx} ({source_stroke.stroke_type})...")
+			cloned_stroke = Stroke()
+			cloned_stroke.stroke_type = source_stroke.stroke_type
+			cloned_stroke.brush_size = (source_stroke.brush_size or 1.0) * scale_factor
+			cloned_stroke.brush_strength = source_stroke.brush_strength
+			cloned_stroke.brush_mode = source_stroke.brush_mode
+			cloned_stroke.brush_falloff = source_stroke.brush_falloff
+
+			dummy_cam_lookat = np.array([0.0, 0.0, 1.0])
+			self._ensure_parameterized(source_stroke, dummy_cam_lookat)
+
+			for sample_idx, source_sample in enumerate(source_stroke.samples):
+				cloned_sample = Sample(
+					position=np.zeros(3),
+					normal=np.zeros(3),
+					size=source_sample.size * scale_factor,
+					pressure=source_sample.pressure,
+					timestamp=source_sample.timestamp,
+					curvature=source_sample.curvature,
+				)
+				if (
+					hasattr(source_sample, "camera_lookat")
+					and source_sample.camera_lookat is not None
+				):
+					cloned_sample.camera_lookat = rotation.apply(
+						source_sample.camera_lookat
+					)
+				else:
+					cloned_sample.camera_lookat = dummy_cam_lookat
+
+				if sample_idx == 0 and stroke_idx == 0:
+					cloned_sample.position = target_anchor_pos
+					cloned_sample.normal = target_anchor_normal
+					print(
+						f"    Sample 0 (First): Placed at target anchor {cloned_sample.position}"
+					)
+
+				elif sample_idx == 0 and stroke_idx > 0:
+					if last_source_sample is None:
+						print(
+							"    Error: Cannot determine start of stroke > 0 without previous source sample."
+						)
+						continue
+
+					delta_pos_world = (
+						source_sample.position - last_source_sample.position
+					)
+					try:
+						delta_rot = self._calculate_rotation_between_normals(
+							last_source_sample.normal, source_sample.normal
+						)
+					except Exception as e:
+						print(
+							f"    Warning: Could not calculate delta rotation for stroke start: {e}. Using identity."
+						)
+						delta_rot = R.identity()
+
+					if last_cloned_sample is None:
+						print(
+							"    Error: Cannot determine start of stroke > 0 without previous cloned sample."
+						)
+						continue
+
+					transformed_delta_pos = rotation.apply(delta_pos_world)
+					initial_cloned_pos = (
+						last_cloned_sample.position + transformed_delta_pos
+					)
+
+					initial_cloned_normal = delta_rot.apply(last_cloned_sample.normal)
+
+					closest_data = MeshInterface.find_closest_point(
+						target_mesh_data, initial_cloned_pos
+					)
+					if closest_data and closest_data[0] is not None:
+						cloned_sample.position = np.array(closest_data[0])
+						if cloned_stroke.stroke_type == "surface":
+							cloned_sample.normal = np.array(closest_data[1])
+						else:
+							norm_mag = np.linalg.norm(initial_cloned_normal)
+							cloned_sample.normal = (
+								initial_cloned_normal / (norm_mag + 1e-9)
+								if norm_mag > 1e-9
+								else np.array([0, 1, 0])
+							)
+
+						print(
+							f"    Sample 0 (Stroke {stroke_idx}): Placed relative to previous stroke end -> {cloned_sample.position}"
+						)
+					else:
+						print(
+							f"    Warning: Failed to snap start of stroke {stroke_idx} to mesh. Using calculated position."
+						)
+						cloned_sample.position = initial_cloned_pos
+						norm_mag = np.linalg.norm(initial_cloned_normal)
+						cloned_sample.normal = (
+							initial_cloned_normal / (norm_mag + 1e-9)
+							if norm_mag > 1e-9
+							else np.array([0, 1, 0])
+						)
+				else:
+					if last_source_sample is None or last_cloned_sample is None:
+						print(
+							f"    Error: Missing previous sample context for sample {sample_idx}. Skipping."
+						)
+						continue
+
+					if cloned_stroke.stroke_type == "surface":
+						try:
+							diff_dict = calculate_raw_sample_differential(
+								source_sample, last_source_sample, "surface"
+							)
+							d_ts = diff_dict["d_ts"]
+							d_ds = diff_dict["d_ds"]
+							d_normal_rot_vec = diff_dict["d_normal_rot"]
+						except Exception as e:
+							print(
+								f"    Warning: Failed to calculate raw differential for sample {sample_idx}: {e}. Using world delta."
+							)
+							delta_pos_world = (
+								source_sample.position - last_source_sample.position
+							)
+							try:
+								delta_rot = self._calculate_rotation_between_normals(
+									last_source_sample.normal, source_sample.normal
+								)
+							except:
+								delta_rot = R.identity()
+
+							transformed_delta_pos = rotation.apply(delta_pos_world)
+							initial_cloned_pos = (
+								last_cloned_sample.position + transformed_delta_pos
+							)
+							initial_cloned_normal = delta_rot.apply(
+								last_cloned_sample.normal
+							)
+
+							closest_data = MeshInterface.find_closest_point(
+								target_mesh_data, initial_cloned_pos
+							)
+							if closest_data and closest_data[0] is not None:
+								cloned_sample.position = np.array(closest_data[0])
+								cloned_sample.normal = np.array(closest_data[1])
+							else:
+								print(
+									f"    Warning: Fallback world delta failed to snap sample {sample_idx}. Skipping."
+								)
+								continue
+							print(
+								f"    Sample {sample_idx}: Calculated via world delta fallback -> {cloned_sample.position}"
+							)
+
+						else:
+							target_ts = last_cloned_sample.ts + d_ts
+							target_ds = last_cloned_sample.ds + d_ds
+
+							predicted_normal = rotate_vector(
+								last_cloned_sample.normal, d_normal_rot_vec
+							)
+							norm_mag = np.linalg.norm(predicted_normal)
+							predicted_normal = (
+								predicted_normal / (norm_mag + 1e-9)
+								if norm_mag > 1e-9
+								else last_cloned_sample.normal
+							)
+
+							local_tangent = np.cross(
+								np.array([0, 0, 1]), last_cloned_sample.normal
+							)
+							if np.linalg.norm(local_tangent) < 1e-6:
+								local_tangent = np.array([1, 0, 0])
+							local_tangent /= np.linalg.norm(local_tangent)
+							local_bitangent = np.cross(
+								last_cloned_sample.normal, local_tangent
+							)
+
+							delta_pos_world = (
+								source_sample.position - last_source_sample.position
+							)
+							projected_delta_tangent = (
+								np.dot(delta_pos_world, local_tangent) * local_tangent
+							)
+							projected_delta_bitangent = (
+								np.dot(delta_pos_world, local_bitangent)
+								* local_bitangent
+							)
+							local_plane_delta = (
+								projected_delta_tangent + projected_delta_bitangent
+							)
+
+							transformed_local_delta = rotation.apply(local_plane_delta)
+
+							initial_cloned_pos = (
+								last_cloned_sample.position + transformed_local_delta
+							)
+
+							closest_data = MeshInterface.find_closest_point(
+								target_mesh_data, initial_cloned_pos
+							)
+							if closest_data and closest_data[0] is not None:
+								cloned_sample.position = np.array(closest_data[0])
+								cloned_sample.normal = np.array(closest_data[1])
+								print(
+									f"    Sample {sample_idx}: Calculated via local frame delta -> {cloned_sample.position}"
+								)
+							else:
+								print(
+									f"    Warning: Failed to snap sample {sample_idx} using local frame delta. Skipping."
+								)
+								continue
+
+					elif cloned_stroke.stroke_type == "freeform":
+						delta_pos_world = (
+							source_sample.position - last_source_sample.position
+						)
+						try:
+							delta_rot = self._calculate_rotation_between_normals(
+								last_source_sample.normal, source_sample.normal
+							)
+						except Exception as e:
+							print(
+								f"    Warning: Could not calculate delta rotation for freeform sample {sample_idx}: {e}. Using identity."
+							)
+							delta_rot = R.identity()
+
+						transformed_delta_pos = rotation.apply(delta_pos_world)
+						cloned_sample.position = (
+							last_cloned_sample.position + transformed_delta_pos
+						)
+
+						cloned_sample.normal = delta_rot.apply(
+							last_cloned_sample.normal
+						)
+						norm_mag = np.linalg.norm(cloned_sample.normal)
+						cloned_sample.normal = (
+							cloned_sample.normal / (norm_mag + 1e-9)
+							if norm_mag > 1e-9
+							else np.array([0, 1, 0])
+						)
+						print(
+							f"    Sample {sample_idx}: Calculated via freeform world delta -> {cloned_sample.position}"
+						)
+
+				cloned_stroke.add_sample(cloned_sample)
+				last_cloned_sample = cloned_sample
+				last_source_sample = source_sample
+
+			if cloned_stroke.samples:
+				try:
+					final_cam_lookat = (
+						cloned_stroke.samples[-1].camera_lookat
+						if hasattr(cloned_stroke.samples[-1], "camera_lookat")
+						else dummy_cam_lookat
+					)
+					self._ensure_parameterized(cloned_stroke, final_cam_lookat)
+					cloned_workflow.add_stroke(cloned_stroke)
+					print(
+						f"  Finished cloning stroke {stroke_idx} with {len(cloned_stroke.samples)} samples."
+					)
+				except Exception as e:
+					print(
+						f"  Warning: Failed to re-parameterize cloned stroke {stroke_idx}: {e}"
+					)
+					cloned_workflow.add_stroke(cloned_stroke)
+			else:
+				print(f"  Warning: Cloned stroke {stroke_idx} ended up empty.")
+
+		print(
+			f"--- Workflow Cloning Finished: {len(cloned_workflow.strokes)} strokes cloned ---"
+		)
+		return cloned_workflow

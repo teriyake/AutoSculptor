@@ -13,17 +13,23 @@ from PySide2.QtWidgets import (  # type: ignore
 	QSpinBox,
 	QTabWidget,
 	QWidget,
+	QMessageBox,
 )
 from PySide2.QtCore import Qt  # type: ignore
 import maya.OpenMayaUI as omui  # type: ignore
+import maya.api.OpenMaya as om2  # type: ignore
 from shiboken2 import wrapInstance  # type: ignore
 import maya.cmds as cmds  # type: ignore
 import numpy as np
 
 from autosculptor.core.data_structures import Sample, Stroke, Workflow
 from autosculptor.core.brush import Brush, BrushMode
+from autosculptor.core.surface_brush import SurfaceBrush
+from autosculptor.core.freeform_brush import FreeformBrush
 from autosculptor.maya.capture import SculptCapture
 from autosculptor.suggestions.visualization import StrokeVisualizer
+from autosculptor.core.mesh_interface import MeshInterface
+from autosculptor.maya.utils import get_active_camera_lookat_vector
 
 from typing import Optional
 
@@ -82,6 +88,9 @@ class SculptingPanel(QWidget):
 	HISTORY_VIZ_COLOR = (0.2, 0.5, 1.0)
 	HISTORY_VIZ_TRANSPARENCY = (0.6, 0.6, 0.6)
 
+	CLONE_VIZ_COLOR = (0.0, 1.0, 0.5)
+	CLONE_VIZ_TRANSPARENCY = (0.6, 0.6, 0.6)
+
 	def __init__(self, main_window_ref, parent=None):
 		super().__init__(parent)
 		self.main_window = main_window_ref
@@ -112,10 +121,24 @@ class SculptingPanel(QWidget):
 		self.stroke_list.setMinimumHeight(150)
 		self.stroke_list.itemSelectionChanged.connect(self.on_stroke_selection_changed)
 		stroke_layout.addWidget(self.stroke_list)
+		stroke_btns_layout = QHBoxLayout()
 		self.delete_stroke_btn = QPushButton("Delete Stroke")
 		self.delete_stroke_btn.clicked.connect(self.on_delete_stroke)
 		self.delete_stroke_btn.setEnabled(False)
-		stroke_layout.addWidget(self.delete_stroke_btn)
+		stroke_btns_layout.addWidget(self.delete_stroke_btn)
+
+		self.preview_clone_btn = QPushButton("Preview Clone")
+		self.preview_clone_btn.clicked.connect(self.on_preview_clone_clicked)
+		self.preview_clone_btn.setEnabled(False)
+		stroke_btns_layout.addWidget(self.preview_clone_btn)
+
+		self.accept_clone_btn = QPushButton("Accept Clone")
+		self.accept_clone_btn.clicked.connect(self.on_accept_clone_clicked)
+		self.accept_clone_btn.setEnabled(False)
+		stroke_btns_layout.addWidget(self.accept_clone_btn)
+
+		stroke_layout.addLayout(stroke_btns_layout)
+
 		stroke_group.setLayout(stroke_layout)
 		layout.addWidget(stroke_group)
 
@@ -145,7 +168,14 @@ class SculptingPanel(QWidget):
 		self.setLayout(layout)
 
 		self.workflow = None
+
 		self.history_visualizer: Optional[StrokeVisualizer] = None
+
+		self.is_waiting_for_clone_target = False
+		self.source_stroke_for_clone_index: Optional[int] = None
+		self.target_selection_scriptJob: Optional[int] = None
+		self.clone_visualizer: Optional[StrokeVisualizer] = None
+		self.pending_cloned_stroke: Optional[Stroke] = None
 		# self.update(generate_random_workflow(5))
 
 	def update(self, workflow):
@@ -212,6 +242,20 @@ class SculptingPanel(QWidget):
 				print(f"SculptingPanel: Error clearing history visualizer: {e}")
 			finally:
 				self.history_visualizer = None
+
+	def clear_clone_preview_visualization(self):
+		if self.clone_visualizer:
+			try:
+				self.clone_visualizer.clear()
+			except Exception as e:
+				print(f"SculptingPanel: Error clearing clone preview visualizer: {e}")
+			finally:
+				self.clone_visualizer = None
+
+		# if self.pending_cloned_stroke:
+		# self.pending_cloned_stroke = None
+
+		self.accept_clone_btn.setEnabled(False)
 
 	def on_select_mesh(self):
 		if self.main_window and self.main_window.sculpt_capture:
@@ -300,7 +344,26 @@ class SculptingPanel(QWidget):
 				else:
 					print("SculptingPanel: Capture already disabled.")
 
+		is_capture_actually_on = (
+			self.main_window
+			and self.main_window.sculpt_capture
+			and self.main_window.sculpt_capture.is_capturing
+		)
+
+		can_preview_clone = (
+			is_capture_actually_on and len(self.stroke_list.selectedItems()) > 0
+		)
+
+		self.preview_clone_btn.setEnabled(can_preview_clone)
+		self.accept_clone_btn.setEnabled(
+			is_capture_actually_on and self.pending_cloned_stroke is not None
+		)
+		if not is_capture_actually_on:
+			self.clear_clone_preview_visualization()
+
 	def on_delete_stroke(self):
+		self.clear_clone_preview_visualization()  # Clear pending clone viz since we are deleting history?
+
 		selected_indices = self.stroke_list.selectedIndexes()
 		if selected_indices:
 			print(f"Selected index: {selected_indices[0].row()}")
@@ -326,11 +389,14 @@ class SculptingPanel(QWidget):
 		Updates the sample list based on the selected stroke.
 		"""
 		self.clear_history_visualization()  # Clear previous viz first
+		self.clear_clone_preview_visualization()  # Clear pending clone viz?
+
 		selected_indexes = self.stroke_list.selectedIndexes()
 		if selected_indexes:
 			print(selected_indexes[0].row())
 			self.update_sample_list(self.workflow.strokes[selected_indexes[0].row()])
 			self.delete_stroke_btn.setEnabled(True)
+			self.preview_clone_btn.setEnabled(True)
 
 			selected_row = selected_indexes[0].row()
 			if self.workflow:
@@ -364,7 +430,248 @@ class SculptingPanel(QWidget):
 						self.history_visualizer = None
 		else:
 			self.delete_stroke_btn.setEnabled(False)
+			self.preview_clone_btn.setEnabled(False)
 			self.sample_list.setRowCount(0)
+
+	def on_preview_clone_clicked(self):
+		if self.is_waiting_for_clone_target:
+			print(
+				"SculptingPanel: Already waiting for target selection. Cancelling previous request."
+			)
+			self.cancel_clone_target_selection()
+
+		selected_indexes = self.stroke_list.selectedIndexes()
+		if not selected_indexes:
+			om2.MGlobal.displayWarning("Please select a history stroke to clone.")
+			return
+
+		self.source_stroke_for_clone_index = selected_indexes[0].row()
+
+		if not cmds.selectMode(q=True, component=True):
+			cmds.selectMode(component=True)
+			cmds.selectType(
+				vertex=True,
+				allComponents=False,
+			)
+			cmds.select(clear=True)
+
+		if not (
+			self.main_window
+			and self.main_window.sculpt_capture
+			and self.main_window.sculpt_capture.is_capturing
+		):
+			om2.MGlobal.displayWarning("Please enable history capture first.")
+			return
+
+		self.is_waiting_for_clone_target = True
+		self.preview_clone_btn.setText("Waiting for Target...")
+		self.preview_clone_btn.setEnabled(False)
+		self.accept_clone_btn.setEnabled(False)
+		self.clear_clone_preview_visualization()
+		self.pending_cloned_stroke = None
+
+		cmds.inViewMessage(
+			amg="<hl>Select Target Vertex:</hl> Please select a single vertex on the mesh to anchor the clone.",
+			pos="midCenter",
+			fade=True,
+			fts=12,
+			fot=100,
+		)
+
+		self.target_selection_scriptJob = cmds.scriptJob(
+			event=["SelectionChanged", self._handle_target_vertex_selection],
+			runOnce=False,
+			# protected=True
+		)
+		print(
+			f"SculptingPanel: Waiting for target vertex selection (Job ID: {self.target_selection_scriptJob})..."
+		)
+
+	def _kill_target_selection_scriptJob(self):
+		if self.target_selection_scriptJob:
+			try:
+				if cmds.scriptJob(exists=self.target_selection_scriptJob):
+					cmds.scriptJob(kill=self.target_selection_scriptJob, force=True)
+					print(
+						f"SculptingPanel: Killed target selection script job {self.target_selection_scriptJob}"
+					)
+			except Exception as e:
+				print(
+					f"SculptingPanel: Error killing script job {self.target_selection_scriptJob}: {e}"
+				)
+			finally:
+				self.target_selection_scriptJob = None
+
+	def cancel_clone_target_selection(self):
+		self._kill_target_selection_scriptJob()
+		cmds.selectMode(object=True)
+		self.is_waiting_for_clone_target = False
+		self.source_stroke_for_clone_index = None
+		self.preview_clone_btn.setText("Preview Clone")
+		self.preview_clone_btn.setEnabled(len(self.stroke_list.selectedItems()) > 0)
+		cmds.inViewMessage(clear="midCenter")
+
+	def _handle_target_vertex_selection(self):
+		if not self.is_waiting_for_clone_target:
+			# print("  _handle_target_vertex_selection called but not waiting.")
+			return
+
+		selection = cmds.ls(selection=True, flatten=True)
+		if not selection or len(selection) != 1 or ".vtx[" not in selection[0]:
+			return
+
+		target_vertex_str = selection[0]
+		print(f"SculptingPanel: Target vertex selected: {target_vertex_str}")
+
+		self._kill_target_selection_scriptJob()
+		self.is_waiting_for_clone_target = False
+		cmds.selectMode(object=True)
+		self.preview_clone_btn.setText("Preview Clone")
+		self.preview_clone_btn.setEnabled(True)
+
+		if not (self.main_window and self.main_window.sculpt_capture):
+			print("SculptingPanel: Capture system not available.")
+			return
+		if self.source_stroke_for_clone_index is None:
+			print("SculptingPanel: Error - Source stroke index lost.")
+			return
+
+		sc = self.main_window.sculpt_capture
+		if not sc.mesh_name:
+			om2.MGlobal.displayError("Sculpting mesh not set in capture system.")
+			return
+
+		if not target_vertex_str.startswith(sc.mesh_name.split("|")[-1] + "."):
+			if not target_vertex_str.startswith(
+				cmds.listRelatives(sc.mesh_name, p=True, f=True)[0].split("|")[-1] + "."
+			):
+				om2.MGlobal.displayError(
+					f"Please select a vertex on the target mesh: {sc.mesh_name}"
+				)
+				self.source_stroke_for_clone_index = None
+				return
+
+		try:
+			target_pos_list = cmds.pointPosition(target_vertex_str, world=True)
+			target_pos = np.array(target_pos_list, dtype=np.float64)
+
+			sel_list = om2.MSelectionList()
+			sel_list.add(target_vertex_str)
+			comp_obj = sel_list.getComponent(0)
+			mesh_path = comp_obj[0]
+			vertex_comp = comp_obj[1]
+
+			if (
+				not vertex_comp.isNull()
+				and vertex_comp.apiType() == om2.MFn.kMeshVertComponent
+			):
+				mesh_fn = om2.MFnMesh(mesh_path)
+				vert_iter = om2.MItMeshVertex(mesh_path, vertex_comp)
+				target_normal_vec = vert_iter.getNormal(om2.MSpace.kWorld)
+				target_normal = np.array(
+					[target_normal_vec.x, target_normal_vec.y, target_normal_vec.z],
+					dtype=np.float64,
+				)
+				norm_mag = np.linalg.norm(target_normal)
+				if norm_mag > 1e-6:
+					target_normal /= norm_mag
+				else:
+					target_normal = np.array([0.0, 1.0, 0.0])
+			else:
+				om2.MGlobal.displayError("Failed to get target vertex normal.")
+				self.source_stroke_for_clone_index = None
+				return
+
+			source_stroke = sc.current_workflow.strokes[
+				self.source_stroke_for_clone_index
+			]
+			if not source_stroke or not source_stroke.samples:
+				om2.MGlobal.displayError("Source stroke is empty.")
+				self.source_stroke_for_clone_index = None
+				return
+			source_anchor_pos = source_stroke.samples[0].position
+			source_anchor_normal = source_stroke.samples[0].normal
+
+			# print("SculptingPanel: Requesting clone preview from synthesizer...")
+			cloned_workflow = sc.synthesizer.clone_workflow(
+				source_strokes=[source_stroke],
+				source_anchor_pos=source_anchor_pos,
+				source_anchor_normal=source_anchor_normal,
+				target_anchor_pos=target_pos,
+				target_anchor_normal=target_normal,
+				target_mesh_data=MeshInterface.get_mesh_data(sc.mesh_name),
+				scale_factor=1.0,
+			)
+
+			if cloned_workflow and cloned_workflow.strokes:
+				self.pending_cloned_stroke = cloned_workflow.strokes[0]
+				print(
+					f"SculptingPanel: Clone preview generated with {len(self.pending_cloned_stroke.samples)} samples."
+				)
+
+				self.clear_clone_preview_visualization()
+				self.clone_visualizer = StrokeVisualizer(
+					self.pending_cloned_stroke,
+					color=self.CLONE_VIZ_COLOR,
+					transparency=self.CLONE_VIZ_TRANSPARENCY,
+				)
+				viz_radius = (
+					self.pending_cloned_stroke.brush_size * 0.5
+					if self.pending_cloned_stroke.brush_size
+					else 0.2
+				)
+				self.clone_visualizer.visualize(viz_radius, 8)
+				self.accept_clone_btn.setEnabled(True)
+			else:
+				om2.MGlobal.displayError("Failed to generate clone preview.")
+				self.pending_cloned_stroke = None
+				self.accept_clone_btn.setEnabled(False)
+
+		except Exception as e:
+			print(f"SculptingPanel: Error during target selection handling: {e}")
+			import traceback
+
+			traceback.print_exc()
+			om2.MGlobal.displayError("Error processing target selection.")
+			self.cancel_clone_target_selection()
+		finally:
+			self._kill_target_selection_scriptJob()
+			self.is_waiting_for_clone_target = False
+			self.preview_clone_btn.setText("Preview Clone")
+			is_stroke_selected = len(self.stroke_list.selectedItems()) > 0
+			self.preview_clone_btn.setEnabled(is_stroke_selected)
+
+	def on_accept_clone_clicked(self):
+		if not self.pending_cloned_stroke:
+			om2.MGlobal.displayWarning("No clone preview available to accept.")
+			return
+
+		if not (
+			self.main_window
+			and self.main_window.sculpt_capture
+			and self.main_window.sculpt_capture.is_capturing
+		):
+			om2.MGlobal.displayWarning("Cannot accept clone: Capture is not active.")
+			return
+
+		print("SculptingPanel: Accepting cloned stroke...")
+
+		sc = self.main_window.sculpt_capture
+		try:
+			sc.apply_cloned_stroke(self.pending_cloned_stroke)
+
+			self.clear_clone_preview_visualization()
+			self.pending_cloned_stroke = None
+			self.accept_clone_btn.setEnabled(False)
+			self.source_stroke_for_clone_index = None
+
+		except Exception as e:
+			print(f"SculptingPanel: Error accepting clone: {e}")
+			om2.MGlobal.displayError("Failed to apply cloned stroke.")
+			self.clear_clone_preview_visualization()
+			self.pending_cloned_stroke = None
+			self.accept_clone_btn.setEnabled(False)
+			self.source_stroke_for_clone_index = None
 
 	def select(self, index):
 		pass
@@ -374,12 +681,17 @@ class SculptingPanel(QWidget):
 		print("SculptingPanel cleanup: Disconnecting signals.")
 
 		self.clear_history_visualization()
+		self.clear_clone_preview_visualization()
+		self._kill_target_selection_scriptJob()
+		cmds.selectMode(object=True)
 		self.mesh_button.clicked.disconnect(self.on_select_mesh)
 		self.enable_capture.stateChanged.disconnect(self.on_enable_capture_changed)
 		self.stroke_list.itemSelectionChanged.disconnect(
 			self.on_stroke_selection_changed
 		)
 		self.delete_stroke_btn.clicked.disconnect(self.on_delete_stroke)
+		self.preview_clone_btn.clicked.disconnect(self.on_preview_clone_clicked)
+		self.accept_clone_btn.clicked.disconnect(self.on_accept_clone_clicked)
 
 		# TODO: Make sure to disconnect other signals here if we connect them later
 
