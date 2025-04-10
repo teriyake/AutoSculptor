@@ -414,7 +414,11 @@ class SculptingPanel(QWidget):
 							if selected_stroke.samples
 							else 0.2
 						)
-						self.history_visualizer.visualize(viz_radius, 8)
+						hist_viz_tube = self.history_visualizer.visualize(viz_radius, 8)
+						cmds.select(hist_viz_tube)
+						disp_layer = cmds.createDisplayLayer()
+						cmds.setAttr(f"{disp_layer}.displayType", 2)
+						cmds.select(None)
 					except ValueError as ve:
 						print(
 							f"SculptingPanel: Cannot visualize stroke {selected_row}: {ve}"
@@ -620,7 +624,13 @@ class SculptingPanel(QWidget):
 					if self.pending_cloned_stroke.brush_size
 					else 0.2
 				)
-				self.clone_visualizer.visualize(viz_radius, 8)
+				clone_viz_tube = self.clone_visualizer.visualize(viz_radius, 8)
+
+				cmds.select(clone_viz_tube)
+				disp_layer = cmds.createDisplayLayer()
+				cmds.setAttr(f"{disp_layer}.displayType", 2)
+				cmds.select(None)
+
 				self.accept_clone_btn.setEnabled(True)
 			else:
 				om2.MGlobal.displayError("Failed to generate clone preview.")
@@ -710,8 +720,17 @@ class SuggestionPanel(QWidget):
 		self.enable_prediction = QCheckBox("Enable Prediction")
 		self.preview_prediction = QCheckBox("Preview Selected Prediction")
 		self.enable_prediction.stateChanged.connect(self.on_enable_prediction_changed)
+
+		self.enable_auto_camera = QCheckBox("Enable Auto Camera")
+		self.enable_auto_camera.setToolTip(
+			"Automatically move camera to view suggestions"
+		)
+		self.enable_auto_camera.stateChanged.connect(self.on_enable_auto_camera_changed)
+
 		checkbox_layout.addWidget(self.enable_prediction)
 		checkbox_layout.addWidget(self.preview_prediction)
+		checkbox_layout.addWidget(self.enable_auto_camera)
+
 		prediction_layout.addLayout(checkbox_layout)
 
 		stroke_id_layout = QHBoxLayout()
@@ -832,8 +851,11 @@ class SuggestionPanel(QWidget):
 
 	def on_enable_prediction_changed(self, state):
 		is_enabled = state == Qt.Checked
-		print(f"SuggestionPanel: Enable Prediction changed to: {is_enabled}")
+		# print(f"SuggestionPanel: Enable Prediction changed to: {is_enabled}")
 		self.recompute_btn.setEnabled(is_enabled)
+		self.accept_sel_btn.setEnabled(is_enabled)
+		self.accept_all_btn.setEnabled(is_enabled)
+		self.enable_auto_camera.setEnabled(is_enabled)
 
 		if self.main_window and self.main_window.sculpt_capture:
 			self.main_window.sculpt_capture.set_suggestions_enabled(is_enabled)
@@ -843,6 +865,18 @@ class SuggestionPanel(QWidget):
 			)
 
 		self.on_stroke_selection_changed()
+
+	def on_enable_auto_camera_changed(self, state):
+		is_enabled = state == Qt.Checked
+		print(f"SuggestionPanel: Enable Auto Camera changed to: {is_enabled}")
+		if self.main_window and self.main_window.sculpt_capture:
+			self.main_window.sculpt_capture.auto_camera_enabled = is_enabled
+			if is_enabled and self.main_window.sculpt_capture.current_suggestions:
+				self.main_window.sculpt_capture._update_auto_camera()
+			if not is_enabled:
+				self.main_window.sculpt_capture.restore_previous_camera()
+		else:
+			print("SuggestionPanel: Capture instance not available for camera control.")
 
 	def on_recompute_clicked(self):
 		print("SuggestionPanel: Force Recompute clicked.")
@@ -906,6 +940,11 @@ class SuggestionPanel(QWidget):
 		self.stroke_list.itemSelectionChanged.disconnect(
 			self.on_stroke_selection_changed
 		)
+		self.enable_auto_camera.stateChanged.disconnect(
+			self.on_enable_auto_camera_changed
+		)
+		self.accept_sel_btn.clicked.disconnect(self.on_accept_sel_clicked)
+		self.accept_all_btn.clicked.disconnect(self.on_accept_all_clicked)
 		# self.recompute_btn.clicked.disconnect(self.on_recompute_clicked)
 
 		# TODO: Make sure to disconnect other signals here if we connect them later

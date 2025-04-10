@@ -24,12 +24,14 @@ TOGGLE_CAPTURE_CMD_NAME = "autoSculptorToggleCaptureCmd"
 TOGGLE_SUGGESTIONS_CMD_NAME = "autoSculptorToggleSuggestionsCmd"
 ACCEPT_SELECTED_CMD_NAME = "autoSculptorAcceptSelectedCmd"
 ACCEPT_ALL_CMD_NAME = "autoSculptorAcceptAllCmd"
+RESTORE_CAMERA_CMD_NAME = "autoSculptorRestoreCameraCmd"
 
 NAMED_COMMANDS = [
 	TOGGLE_CAPTURE_CMD_NAME,
 	TOGGLE_SUGGESTIONS_CMD_NAME,
 	ACCEPT_SELECTED_CMD_NAME,
 	ACCEPT_ALL_CMD_NAME,
+	RESTORE_CAMERA_CMD_NAME,
 ]
 
 
@@ -245,6 +247,36 @@ class AutoSculptorDrawNode(OpenMayaMPx.MPxLocatorNode):
 		pass
 
 
+class AutoSculptorRestoreCameraCmd(OpenMayaMPx.MPxCommand):
+	kPluginCmdName = RESTORE_CAMERA_CMD_NAME
+
+	def __init__(self):
+		OpenMayaMPx.MPxCommand.__init__(self)
+
+	@staticmethod
+	def cmdCreator():
+		return AutoSculptorRestoreCameraCmd()
+
+	def doIt(self, args):
+		try:
+			import autosculptor.ui.ui as auto_sculptor_ui
+
+			instance = auto_sculptor_ui.sculpting_tool_window_instance
+			if instance and instance.sculpt_capture:
+				instance.sculpt_capture.restore_previous_camera()
+			else:
+				om.MGlobal.displayWarning("AutoSculptor capture system not active.")
+		except Exception as e:
+			om.MGlobal.displayError(f"Error restoring camera: {e}")
+			import traceback
+
+			traceback.print_exc()
+
+	@staticmethod
+	def syntaxCreator():
+		return om.MSyntax()
+
+
 def show_sculpting_tool_window_action():
 	window_name = "AutoSculptorToolWindow"
 	if cmds.window(window_name, q=True, exists=True):
@@ -302,6 +334,12 @@ def initializePlugin(mobject):
 			SuggestionDrawer.creator,
 		)
 
+		mplugin.registerCommand(
+			AutoSculptorRestoreCameraCmd.kPluginCmdName,
+			AutoSculptorRestoreCameraCmd.cmdCreator,
+			AutoSculptorRestoreCameraCmd.syntaxCreator,
+		)
+
 		create_menu()
 
 		om.MGlobal.displayInfo(
@@ -322,6 +360,8 @@ def uninitializePlugin(mobject):
 		omr.MDrawRegistry.deregisterDrawOverrideCreator(
 			SuggestionDrawer.drawDBClassification, SuggestionDrawer.drawRegistrantId
 		)
+		mplugin.deregisterCommand(AutoSculptorRestoreCameraCmd.kPluginCmdName)
+
 		om.MGlobal.displayInfo(
 			"AutoSculptor plugin unloaded, command and draw override deregistered!"
 		)
