@@ -20,6 +20,7 @@ import maya.OpenMayaUI as omui  # type: ignore
 import maya.api.OpenMaya as om2  # type: ignore
 from shiboken2 import wrapInstance  # type: ignore
 import maya.cmds as cmds  # type: ignore
+from maya.app.general.mayaMixin import MayaQWidgetDockableMixin
 import numpy as np
 
 from autosculptor.core.data_structures import Sample, Stroke, Workflow
@@ -950,8 +951,10 @@ class SuggestionPanel(QWidget):
 		# TODO: Make sure to disconnect other signals here if we connect them later
 
 
-class AutoSculptorToolWindow(QDialog):
+class AutoSculptorToolWindow(MayaQWidgetDockableMixin, QDialog):
 	def __init__(self, parent=get_maya_main_window()):
+		if cmds.workspaceControl("AutoSculptor", exists=True):
+			cmds.deleteUI("AutoSculptor", control=True)
 		super().__init__(parent)
 		self.sculpt_capture = None
 
@@ -969,23 +972,6 @@ class AutoSculptorToolWindow(QDialog):
 
 		layout.addWidget(self.tabs)
 		self.setLayout(layout)
-
-		# self.setDockable()
-
-	def setDockable(self):
-		try:
-			if cmds.workspaceControl("AutoSculptor", exists=True):
-				cmds.deleteUI("AutoSculptor", control=True)
-			self.setObjectName("AutoSculptorToolWindow")
-			workspace_control = cmds.workspaceControl(
-				"AutoSculptor", dockToMainWindow=("right", 1)
-			)
-			mixin_ptr = omui.MQtUtil.findControl("AutoSculptor")
-			if mixin_ptr:
-				mixin_widget = wrapInstance(int(mixin_ptr), QWidget)
-				mixin_widget.layout().addWidget(self)
-		except Exception as e:
-			print("Failed to dock window:", e)
 
 	def closeEvent(self, event):
 		"""Override close event for cleanup."""
@@ -1009,5 +995,5 @@ def show_sculpting_tool_window():
 	except:
 		pass
 	sculpting_tool_window = AutoSculptorToolWindow()
-	sculpting_tool_window.show()
+	sculpting_tool_window.show(dockable=True)
 	return sculpting_tool_window
