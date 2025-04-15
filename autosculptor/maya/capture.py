@@ -175,7 +175,7 @@ class SculptCapture:
 
 			self.active_stroke_in_progress = None
 
-			if self.suggestions_enabled and len(self.current_workflow.strokes) > 2:
+			if self.suggestions_enabled and len(self.current_workflow.strokes) > 1:
 				self.generate_suggestions()
 
 		try:
@@ -412,34 +412,6 @@ class SculptCapture:
 
 			self.previous_positions[self.mesh_name] = current_points
 
-			for viz in self.suggestion_visualizers:
-				viz.clear()
-			self.suggestion_visualizers.clear()
-
-			if self.suggestions_enabled and self.current_suggestions:
-				print(f"Visualizing {len(self.current_suggestions)} suggestions.")
-				for suggestion_stroke in self.current_suggestions:
-					if suggestion_stroke and len(suggestion_stroke.samples) > 0:
-						try:
-							visualizer = StrokeVisualizer(suggestion_stroke)
-							viz_radius = (
-								suggestion_stroke.samples[0].size * 0.5
-								if suggestion_stroke.samples
-								else 0.2
-							)
-							suggestion_viz_tube = visualizer.visualize(viz_radius, 8)
-							cmds.select(suggestion_viz_tube)
-							disp_layer = cmds.createDisplayLayer()
-							cmds.setAttr(f"{disp_layer}.displayType", 2)
-							cmds.select(None)
-
-							self.suggestion_visualizers.append(visualizer)
-
-						except Exception as viz_e:
-							print(
-								f"SculptCapture: Error visualizing suggestion: {viz_e}"
-							)
-
 		except Exception as e:
 			print(f"Error in process_mesh_changes: {e}")
 			import traceback
@@ -449,6 +421,35 @@ class SculptCapture:
 				self.previous_positions[
 					self.mesh_name
 				] = self.get_world_space_positions(self.mesh_name)
+
+	def _visualize_suggestions(self):
+		for viz in self.suggestion_visualizers:
+			viz.clear()
+		self.suggestion_visualizers.clear()
+
+		if self.suggestions_enabled and self.current_suggestions:
+			print(f"Visualizing {len(self.current_suggestions)} suggestions.")
+			for suggestion_stroke in self.current_suggestions:
+				if suggestion_stroke and len(suggestion_stroke.samples) > 0:
+					try:
+						visualizer = StrokeVisualizer(suggestion_stroke)
+						viz_radius = (
+							suggestion_stroke.samples[0].size * 0.5
+							if suggestion_stroke.samples
+							else 0.2
+						)
+						suggestion_viz_tube = visualizer.visualize(viz_radius, 8)
+						cmds.select(suggestion_viz_tube)
+						disp_layer = cmds.createDisplayLayer()
+						cmds.setAttr(f"{disp_layer}.displayType", 2)
+						cmds.select(None)
+
+						self.suggestion_visualizers.append(visualizer)
+
+					except Exception as viz_e:
+						print(f"SculptCapture: Error visualizing suggestion: {viz_e}")
+		else:
+			print(f"SculptCapture: Nothing to visualize!")
 
 	def get_selected_mesh_name(self):
 		"""Gets the full path of the selected mesh shape node."""
@@ -497,6 +498,7 @@ class SculptCapture:
 			)
 			if suggestion:
 				self.current_suggestions = [suggestion]
+				self._visualize_suggestions()
 				self._update_auto_camera()
 				print(
 					f"SculptCapture: Suggestion generated: {len(suggestion.samples)} samples"

@@ -52,7 +52,7 @@ class SurfaceBrush(Brush):
 		brush_position = sample.position
 		brush_size = self.size * sample.size
 		# brush_strength = self.strength * sample.pressure
-		brush_strength = self.strength * 50.0
+		brush_strength = self.strength * 40.0
 		affected_vertices_indices = []
 		affected_vertices_local_positions = []
 
