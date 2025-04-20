@@ -86,6 +86,15 @@ def generate_random_workflow(num_strokes):
 	return workflow
 
 
+def approx(num_or_list):
+
+	if isinstance(num_or_list, np.ndarray):
+		res_text = ""
+		for num in num_or_list:
+			res_text += str(round(num, 2)) + ","
+		return  res_text[:len(res_text) - 1]
+	return str(round(num_or_list, 2))
+
 class SculptingPanel(QWidget):
 	HISTORY_VIZ_COLOR = (0.2, 0.5, 1.0)
 	HISTORY_VIZ_TRANSPARENCY = (0.6, 0.6, 0.6)
@@ -204,10 +213,10 @@ class SculptingPanel(QWidget):
 				row_position, 2, QTableWidgetItem(str(len(stroke.samples)))
 			)
 			self.stroke_list.setItem(
-				row_position, 3, QTableWidgetItem(str(stroke.brush_size))
+				row_position, 3, QTableWidgetItem(approx(stroke.brush_size))
 			)
 			self.stroke_list.setItem(
-				row_position, 4, QTableWidgetItem(str(stroke.brush_strength))
+				row_position, 4, QTableWidgetItem(approx(stroke.brush_strength))
 			)
 		self.workflow = workflow
 
@@ -227,15 +236,15 @@ class SculptingPanel(QWidget):
 			self.sample_list.insertRow(row_position)
 			# Columns: ["Position", "Normal", "Size", "Pressure", "Timestamp"]
 			self.sample_list.setItem(
-				row_position, 0, QTableWidgetItem(str(smp.position))
+				row_position, 0, QTableWidgetItem(approx(smp.position))
 			)
-			self.sample_list.setItem(row_position, 1, QTableWidgetItem(str(smp.normal)))
-			self.sample_list.setItem(row_position, 2, QTableWidgetItem(str(smp.size)))
+			self.sample_list.setItem(row_position, 1, QTableWidgetItem(approx(smp.normal)))
+			self.sample_list.setItem(row_position, 2, QTableWidgetItem(approx(smp.size)))
 			self.sample_list.setItem(
-				row_position, 3, QTableWidgetItem(str(smp.pressure))
+				row_position, 3, QTableWidgetItem(approx(smp.pressure))
 			)
 			self.sample_list.setItem(
-				row_position, 4, QTableWidgetItem(str(smp.timestamp))
+				row_position, 4, QTableWidgetItem(approx(smp.timestamp))
 			)
 
 	def clear_history_visualization(self):
@@ -816,10 +825,10 @@ class SuggestionPanel(QWidget):
 				row_position, 2, QTableWidgetItem(str(len(stroke.samples)))
 			)
 			self.stroke_list.setItem(
-				row_position, 3, QTableWidgetItem(str(stroke.brush_size))
+				row_position, 3, QTableWidgetItem(approx(stroke.brush_size))
 			)
 			self.stroke_list.setItem(
-				row_position, 4, QTableWidgetItem(str(stroke.brush_strength))
+				row_position, 4, QTableWidgetItem(approx(stroke.brush_strength))
 			)
 		self.workflow = workflow
 
@@ -834,15 +843,15 @@ class SuggestionPanel(QWidget):
 			self.sample_list.insertRow(row_position)
 			# Columns: ["Position", "Normal", "Size", "Pressure", "Timestamp"]
 			self.sample_list.setItem(
-				row_position, 0, QTableWidgetItem(str(smp.position))
+				row_position, 0, QTableWidgetItem(approx(smp.position))
 			)
-			self.sample_list.setItem(row_position, 1, QTableWidgetItem(str(smp.normal)))
-			self.sample_list.setItem(row_position, 2, QTableWidgetItem(str(smp.size)))
+			self.sample_list.setItem(row_position, 1, QTableWidgetItem(approx(smp.normal)))
+			self.sample_list.setItem(row_position, 2, QTableWidgetItem(approx(smp.size)))
 			self.sample_list.setItem(
-				row_position, 3, QTableWidgetItem(str(smp.pressure))
+				row_position, 3, QTableWidgetItem(approx(smp.pressure))
 			)
 			self.sample_list.setItem(
-				row_position, 4, QTableWidgetItem(str(smp.timestamp))
+				row_position, 4, QTableWidgetItem(approx(smp.timestamp))
 			)
 
 	def on_stroke_selection_changed(self):
