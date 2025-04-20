@@ -14,6 +14,7 @@ from PySide2.QtWidgets import (  # type: ignore
 	QTabWidget,
 	QWidget,
 	QMessageBox,
+	QAbstractItemView
 )
 from PySide2.QtCore import Qt  # type: ignore
 import maya.OpenMayaUI as omui  # type: ignore
@@ -116,6 +117,7 @@ class SculptingPanel(QWidget):
 		stroke_layout.addWidget(self.enable_capture)
 		self.stroke_list = QTableWidget()
 		self.stroke_list.setColumnCount(5)
+		self.stroke_list.setSelectionBehavior(QAbstractItemView.SelectRows)
 		self.stroke_list.setHorizontalHeaderLabels(
 			["Type", "Mode", "SmpCount", "Size", "Strength"]
 		)
@@ -148,6 +150,7 @@ class SculptingPanel(QWidget):
 		sample_layout = QVBoxLayout()
 		self.sample_list = QTableWidget()
 		self.sample_list.setColumnCount(5)
+		self.sample_list.setSelectionBehavior(QAbstractItemView.SelectRows)
 		self.sample_list.setHorizontalHeaderLabels(
 			["Position", "Normal", "Size", "Pressure", "Timestamp"]
 		)
@@ -394,12 +397,12 @@ class SculptingPanel(QWidget):
 
 		selected_indexes = self.stroke_list.selectedIndexes()
 		if selected_indexes:
-			print(selected_indexes[0].row())
-			self.update_sample_list(self.workflow.strokes[selected_indexes[0].row()])
+			selected_row = selected_indexes[0].row()
+			print(selected_row)
+			self.update_sample_list(self.workflow.strokes[selected_row])
 			self.delete_stroke_btn.setEnabled(True)
 			self.preview_clone_btn.setEnabled(True)
-
-			selected_row = selected_indexes[0].row()
+			
 			if self.workflow:
 				selected_stroke = self.workflow.strokes[selected_row]
 
@@ -752,6 +755,7 @@ class SuggestionPanel(QWidget):
 		stroke_layout = QVBoxLayout()
 		self.stroke_list = QTableWidget()
 		self.stroke_list.setColumnCount(5)
+		self.stroke_list.setSelectionBehavior(QAbstractItemView.SelectRows)
 		self.stroke_list.setHorizontalHeaderLabels(
 			["Type", "Mode", "Size", "Strength", "Falloff"]
 		)
@@ -766,6 +770,7 @@ class SuggestionPanel(QWidget):
 		sample_layout = QVBoxLayout()
 		self.sample_list = QTableWidget()
 		self.sample_list.setColumnCount(5)
+		self.sample_list.setSelectionBehavior(QAbstractItemView.SelectRows)
 		self.sample_list.setHorizontalHeaderLabels(
 			["Position", "Normal", "Size", "Pressure", "Timestamp"]
 		)
@@ -958,7 +963,7 @@ class AutoSculptorToolWindow(MayaQWidgetDockableMixin, QDialog):
 		super().__init__(parent)
 		self.sculpt_capture = None
 
-		self.setWindowTitle("Sculpting and Suggestion Tool")
+		self.setWindowTitle("AutoSculptor")
 		self.setGeometry(100, 100, 600, 700)
 
 		layout = QVBoxLayout()
