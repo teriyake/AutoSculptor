@@ -1,5 +1,6 @@
 import maya.cmds as cmds  # type: ignore
 import maya.api.OpenMaya as om2  # type: ignore
+import maya.utils
 import numpy as np
 import traceback
 from typing import Optional, Tuple
@@ -103,4 +104,67 @@ def get_active_camera_details() -> Optional[Tuple[str, om2.MDagPath]]:
 		return cam_transform, cam_dag_path
 	except Exception as e:
 		print(f"Error getting active camera: {e}")
+		return None
+
+
+def get_tool_name_deferred(callback_function):
+	"""
+	Attempts to get the sculpt tool display name using contextInfo,
+	but defers the execution to avoid timing issues in plugins.
+
+	Args:
+		callback_function: A function that will be called with the
+						   result (the tool name string or None).
+	"""
+	try:
+		ctx_name = cmds.currentCtx()
+
+		def deferred_query():
+			print(f"Executing deferred query for context: {ctx_name}")
+			result = None
+			try:
+				result = cmds.contextInfo(ctx_name, title=True)
+				print(f"Deferred query result: {result}")
+			except Exception as e:
+				print(
+					f"Error during deferred cmds.contextInfo('{ctx_name}', title=True): {e}"
+				)
+			finally:
+				callback_function(result)
+
+		maya.utils.executeDeferred(deferred_query)
+
+	except Exception as e:
+		print(f"Error setting up deferred execution: {e}")
+		callback_function(None)
+
+
+def get_tool_name_main_thread():
+	"""
+	Attempts to get the sculpt tool display name using contextInfo,
+	ensuring the call happens on the main Maya thread (otherwise Maya complains).
+
+	Returns:
+		The tool name string or None if an error occurs.
+	"""
+	try:
+		ctx_name = cmds.currentCtx()
+
+		def main_thread_action():
+			print(f"Executing main_thread_action for context: {ctx_name}")
+			try:
+				result = cmds.contextInfo(ctx_name, title=True)
+				print(f"Main thread query result: {result}")
+				return result
+			except Exception as e:
+				print(
+					f"Error during main_thread_action cmds.contextInfo('{ctx_name}', title=True): {e}"
+				)
+				return None
+
+		tool_name = maya.utils.executeInMainThreadWithResult(main_thread_action)
+		return tool_name
+
+	except Exception as e:
+		print(f"Error setting up main thread execution: {e}")
 		return None

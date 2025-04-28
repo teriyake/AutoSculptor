@@ -13,10 +13,66 @@ from autosculptor.analysis.geodesic_calculator import CachedGeodesicCalculator
 from autosculptor.maya.utils import (
 	get_active_camera_details,
 	get_active_camera_lookat_vector,
+	get_tool_name_deferred,
+	get_tool_name_main_thread,
 )
 from autosculptor.core.brush import BrushMode
 from autosculptor.core.surface_brush import SurfaceBrush
 from autosculptor.core.freeform_brush import FreeformBrush
+
+MAYA_BRUSH_TO_AUTOSCULPT_TYPE = {
+	"Sculpt": "surface",
+	"Foamy": "surface",
+	"Flatten": "surface",
+	"Wax": "surface",
+	"Scrape": "surface",
+	"Fill": "surface",
+	"Knife": "surface",
+	"Pinch": "surface",
+	"Relax": "surface",
+	"Smear": "surface",
+	"Smooth": "surface",
+	"Imprint": "surface",
+	"Spray": "surface",
+	"Grab": "freeform",
+	"Bulge": "freeform",
+	"Amplify": "freeform",
+}
+
+DEFAULT_BRUSH_TYPE = "surface"
+
+
+def get_autosculpt_brush_type(maya_tool_name):
+	"""Infers AutoSculptor brush type from Maya tool name."""
+
+	return MAYA_BRUSH_TO_AUTOSCULPT_TYPE.get(maya_tool_name, DEFAULT_BRUSH_TYPE)
+
+
+def get_tool_name_callback(tool_name):
+	if tool_name:
+		return tool_name.split(" ", 1)[0]
+	else:
+		return "Smooth"
+
+
+def get_autosculpt_brush_mode(ctx, maya_tool_name):
+	"""Infers AutoSculptor brush mode."""
+	if maya_tool_name == "Smooth":
+		return BrushMode.SMOOTH
+	try:
+		if cmds.sculptMeshCacheCtx(ctx, q=True, exists="invertFunction"):
+			is_inverted = cmds.sculptMeshCacheCtx(ctx, q=True, invertFunction=True)
+			if is_inverted:
+				return BrushMode.SUBTRACT
+			else:
+				return BrushMode.ADD
+		else:
+			return BrushMode.ADD
+	except Exception as e:
+		print(
+			f"Warning: Error querying sculpt context flags for mode: {e}. Defaulting to ADD."
+		)
+		return BrushMode.ADD
 
 
 class SculptCapture:
@@ -236,23 +292,28 @@ class SculptCapture:
 				if not tool_name:
 					return
 
+				# tool_actual_name = get_tool_name_deferred(get_tool_name_callback)
+				tool_actual_name = get_tool_name_main_thread()
+				if tool_actual_name is not None:
+					tool_actual_name = tool_actual_name.split(" ", 1)[0]
 				brush_params = self.get_brush_size_and_pressure(tool_name)
 				if brush_params is None:
 					return
 				brush_size, brush_pressure = brush_params
 
 				current_stroke = Stroke()
-				current_stroke.stroke_type = (
-					"surface"  # TODO: Get actual stroke type from tool ctx
-				)
+				current_stroke.stroke_type = get_autosculpt_brush_type(tool_actual_name)
 				current_stroke.brush_size = brush_size
 				current_stroke.brush_strength = brush_pressure
-				current_stroke.brush_mode = (
-					"ADD"  # TODO: Get actual brush mode from tool ctx
-				)
+				current_stroke.brush_mode = get_autosculpt_brush_mode(
+					tool_name, tool_actual_name
+				).name
 				current_stroke.brush_falloff = "smooth"  # TODO:
 				self.active_stroke_in_progress = current_stroke
 				stroke_continued = False
+				print(
+					f"Inferred Brush: MayaTool='{tool_name}', Type='{current_stroke.stroke_type}', Mode='{current_stroke.brush_mode}'"
+				)
 				print("SculptCapture: Created new stroke")
 
 			moved_points = current_points[moved_indices]

@@ -14,14 +14,14 @@ from PySide2.QtWidgets import (  # type: ignore
 	QTabWidget,
 	QWidget,
 	QMessageBox,
-	QAbstractItemView
+	QAbstractItemView,
 )
 from PySide2.QtCore import Qt  # type: ignore
 import maya.OpenMayaUI as omui  # type: ignore
 import maya.api.OpenMaya as om2  # type: ignore
 from shiboken2 import wrapInstance  # type: ignore
 import maya.cmds as cmds  # type: ignore
-from maya.app.general.mayaMixin import MayaQWidgetDockableMixin
+from maya.app.general.mayaMixin import MayaQWidgetDockableMixin  # type: ignore
 import numpy as np
 
 from autosculptor.core.data_structures import Sample, Stroke, Workflow
@@ -92,8 +92,9 @@ def approx(num_or_list):
 		res_text = ""
 		for num in num_or_list:
 			res_text += str(round(num, 2)) + ","
-		return  res_text[:len(res_text) - 1]
+		return res_text[: len(res_text) - 1]
 	return str(round(num_or_list, 2))
+
 
 class SculptingPanel(QWidget):
 	HISTORY_VIZ_COLOR = (0.2, 0.5, 1.0)
@@ -238,8 +239,12 @@ class SculptingPanel(QWidget):
 			self.sample_list.setItem(
 				row_position, 0, QTableWidgetItem(approx(smp.position))
 			)
-			self.sample_list.setItem(row_position, 1, QTableWidgetItem(approx(smp.normal)))
-			self.sample_list.setItem(row_position, 2, QTableWidgetItem(approx(smp.size)))
+			self.sample_list.setItem(
+				row_position, 1, QTableWidgetItem(approx(smp.normal))
+			)
+			self.sample_list.setItem(
+				row_position, 2, QTableWidgetItem(approx(smp.size))
+			)
 			self.sample_list.setItem(
 				row_position, 3, QTableWidgetItem(approx(smp.pressure))
 			)
@@ -411,7 +416,7 @@ class SculptingPanel(QWidget):
 			self.update_sample_list(self.workflow.strokes[selected_row])
 			self.delete_stroke_btn.setEnabled(True)
 			self.preview_clone_btn.setEnabled(True)
-			
+
 			if self.workflow:
 				selected_stroke = self.workflow.strokes[selected_row]
 
@@ -845,8 +850,12 @@ class SuggestionPanel(QWidget):
 			self.sample_list.setItem(
 				row_position, 0, QTableWidgetItem(approx(smp.position))
 			)
-			self.sample_list.setItem(row_position, 1, QTableWidgetItem(approx(smp.normal)))
-			self.sample_list.setItem(row_position, 2, QTableWidgetItem(approx(smp.size)))
+			self.sample_list.setItem(
+				row_position, 1, QTableWidgetItem(approx(smp.normal))
+			)
+			self.sample_list.setItem(
+				row_position, 2, QTableWidgetItem(approx(smp.size))
+			)
 			self.sample_list.setItem(
 				row_position, 3, QTableWidgetItem(approx(smp.pressure))
 			)

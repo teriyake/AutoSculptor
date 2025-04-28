@@ -449,6 +449,101 @@ class StrokeSynthesizer:
 
 		return optimized_stroke
 
+	def _apply_parameter_smoothing(self, stroke: Stroke, iterations: int = 3) -> Stroke:
+		"""Applies smoothing to the parameter space of a stroke."""
+
+		if not stroke.samples or len(stroke.samples) < 3:
+			print("Skipping smoothing: Not enough samples.")
+			return stroke
+
+		if not self.parameterizer:
+			return stroke
+
+		print(f"Applying parameter smoothing ({iterations} iterations)...")
+		smoothed_stroke = copy.deepcopy(stroke)
+
+		num_samples = len(smoothed_stroke.samples)
+
+		if smoothed_stroke.stroke_type == "surface":
+			ts_values = np.array([s.ts for s in smoothed_stroke.samples])
+			ds_values = np.array([s.ds for s in smoothed_stroke.samples])
+
+			for _ in range(iterations):
+				ts_old = ts_values.copy()
+				ds_old = ds_values.copy()
+				for i in range(1, num_samples - 1):
+					ts_values[i] = (ts_old[i - 1] + ts_old[i] + ts_old[i + 1]) / 3.0
+					ds_values[i] = (ds_old[i - 1] + ds_old[i] + ds_old[i + 1]) / 3.0
+				ts_values[0], ts_values[-1] = ts_old[0], ts_old[-1]
+				ds_values[0], ds_values[-1] = ds_old[0], ds_old[-1]
+
+			for i, sample in enumerate(smoothed_stroke.samples):
+				sample.ts = np.clip(ts_values[i], 0.0, 1.0)
+				sample.ds = np.clip(ds_values[i], -1.0, 1.0)
+
+		elif smoothed_stroke.stroke_type == "freeform":
+			xs_values = np.array([s.xs for s in smoothed_stroke.samples])
+			ys_values = np.array([s.ys for s in smoothed_stroke.samples])
+			zs_values = np.array([s.zs for s in smoothed_stroke.samples])
+
+			for _ in range(iterations):
+				xs_old, ys_old, zs_old = (
+					xs_values.copy(),
+					ys_values.copy(),
+					zs_values.copy(),
+				)
+				for i in range(1, num_samples - 1):
+					xs_values[i] = (xs_old[i - 1] + xs_old[i] + xs_old[i + 1]) / 3.0
+					ys_values[i] = (ys_old[i - 1] + ys_old[i] + ys_old[i + 1]) / 3.0
+					zs_values[i] = (zs_old[i - 1] + zs_old[i] + zs_old[i + 1]) / 3.0
+				xs_values[0], xs_values[-1] = xs_old[0], xs_old[-1]
+				ys_values[0], ys_values[-1] = ys_old[0], ys_old[-1]
+				zs_values[0], zs_values[-1] = zs_old[0], zs_old[-1]
+
+			for i, sample in enumerate(smoothed_stroke.samples):
+				sample.xs = xs_values[i]
+				sample.ys = ys_values[i]
+				sample.zs = np.clip(zs_values[i], 0.0, 1.0)
+		else:
+			return stroke
+
+		if not smoothed_stroke.samples:
+			return smoothed_stroke
+
+		print("  Updating world coordinates after parameter smoothing...")
+		valid_samples = []
+		ref_sample = smoothed_stroke.samples[0]
+
+		for i, sample in enumerate(smoothed_stroke.samples):
+			try:
+				new_pos, new_norm = self.parameterizer._params_to_world(
+					sample, stroke, stroke.stroke_type
+				)
+
+				if new_pos is not None and not np.any(np.isnan(new_pos)):
+					sample.position = new_pos
+					if new_norm is not None:
+						sample.normal = new_norm
+					valid_samples.append(sample)
+				else:
+					print(
+						f"  Warning: _params_to_world returned invalid position for sample {i}. Skipping."
+					)
+			except Exception as e:
+				print(
+					f"  Error in _params_to_world during smoothing update for sample {i}: {e}"
+				)
+
+		smoothed_stroke.samples = valid_samples
+		if not smoothed_stroke.samples:
+			print("Warning: Smoothing resulted in an empty stroke after world update.")
+			return stroke
+
+		print(
+			f"Parameter smoothing complete. Stroke now has {len(smoothed_stroke.samples)} samples."
+		)
+		return smoothed_stroke
+
 	def synthesize_next_stroke(
 		self,
 		current_workflow: Workflow,
@@ -457,6 +552,7 @@ class StrokeSynthesizer:
 		energy_threshold: float = 50.0,
 		neighbor_params: dict = None,
 		optimization_alpha=0.2,
+		smoothing_iterations: int = 0,
 	) -> Optional[Stroke]:
 		"""
 		Synthesizes the next stroke using initialization and iterative optimization.
@@ -889,6 +985,15 @@ class StrokeSynthesizer:
 			print(
 				f"  Iteration {iteration + 1} took {time.time() - iter_start_time:.3f}s"
 			)
+
+		if smoothing_iterations > 0:
+			print(
+				f"\nApplying final parameter smoothing ({smoothing_iterations} iterations)..."
+			)
+			optimized_stroke = self._apply_parameter_smoothing(
+				optimized_stroke, iterations=smoothing_iterations
+			)
+		self._ensure_parameterized(optimized_stroke, camera_lookat)
 
 		final_energy = float("inf")
 		final_best_match_bi = None
