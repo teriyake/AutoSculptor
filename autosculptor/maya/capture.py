@@ -59,19 +59,12 @@ def get_autosculpt_brush_mode(ctx, maya_tool_name):
 	"""Infers AutoSculptor brush mode."""
 	if maya_tool_name == "Smooth":
 		return BrushMode.SMOOTH
-	try:
-		if cmds.sculptMeshCacheCtx(ctx, q=True, exists="invertFunction"):
-			is_inverted = cmds.sculptMeshCacheCtx(ctx, q=True, invertFunction=True)
-			if is_inverted:
-				return BrushMode.SUBTRACT
-			else:
-				return BrushMode.ADD
-		else:
-			return BrushMode.ADD
-	except Exception as e:
-		print(
-			f"Warning: Error querying sculpt context flags for mode: {e}. Defaulting to ADD."
-		)
+
+	modifiers = cmds.getModifiers()
+
+	if (modifiers & 4) != 0: # ctrl
+		return BrushMode.SUBTRACT
+	else:
 		return BrushMode.ADD
 
 
