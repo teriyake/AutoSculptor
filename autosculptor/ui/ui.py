@@ -226,9 +226,11 @@ class SculptingPanel(QWidget):
 
 		if len(self.workflow.strokes) > 0:
 			self.delete_stroke_btn.setEnabled(True)
+			self.clear_all_btn.setEnabled(True)
 			self.clone_stroke_btn.setEnabled(True)
 		else:
 			self.delete_stroke_btn.setEnabled(False)
+			self.clear_all_btn.setEnabled(False)
 			self.clone_stroke_btn.setEnabled(False)
 
 	def update_sample_list(self, stroke):
