@@ -939,7 +939,7 @@ class SculptCapture:
 				suggestion_workflow.strokes = list(self.current_suggestions)
 				self.update_suggestion_callback(suggestion_workflow)
 
-			# self.generate_suggestions()
+			self.generate_suggestions()
 
 			if undo_chunk_is_open:
 				cmds.undoInfo(closeChunk=True)
