@@ -52,7 +52,7 @@ class SurfaceBrush(Brush):
 
 		brush_position = np.array(sample.position, dtype=np.float64)
 		brush_radius = sample.size if sample.size > 1e-6 else self.size
-		brush_strength_factor = self.strength * sample.pressure * 100 * 100
+		brush_strength_factor = self.strength * 100
 
 		affected_indices = []
 		distances = []
@@ -127,7 +127,7 @@ class SurfaceBrush(Brush):
 				falloff = self.calculate_falloff(distances[i], brush_radius)
 				vertex_normal = vertex_normals[i]
 
-				displacement_magnitude = falloff * brush_strength_factor * 0.1
+				displacement_magnitude = falloff * brush_strength_factor * 0.5
 				if self.mode == BrushMode.ADD:
 					displacement = vertex_normal * displacement_magnitude
 				elif self.mode == BrushMode.SUBTRACT:

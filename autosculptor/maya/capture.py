@@ -62,7 +62,7 @@ def get_autosculpt_brush_mode(ctx, maya_tool_name):
 
 	modifiers = cmds.getModifiers()
 
-	if (modifiers & 4) != 0: # ctrl
+	if (modifiers & 4) != 0:  # ctrl
 		return BrushMode.SUBTRACT
 	else:
 		return BrushMode.ADD
@@ -1109,6 +1109,41 @@ class SculptCapture:
 				except Exception as final_close_err:
 					print(f"Error closing undo chunk: {final_close_err}")
 			raise
+
+	def clear_history(self):
+		"""Clears the entire sculpting history."""
+		print("SculptCapture: Clearing history.")
+		self.current_workflow = Workflow()
+		if self.update_history_callback:
+			self.update_history_callback(self.copy_workflow())
+		self.clear_suggestions()
+
+	def reject_suggestion(self, suggestion_index: int):
+		"""Rejects (removes) a suggestion at the given index."""
+		if suggestion_index < 0 or suggestion_index >= len(self.current_suggestions):
+			print(
+				f"WARNING: Invalid suggestion index for rejection: {suggestion_index}"
+			)
+			return
+
+		print(f"SculptCapture: Rejecting suggestion at index {suggestion_index}")
+		try:
+			if 0 <= suggestion_index < len(self.suggestion_visualizers):
+				self.suggestion_visualizers[suggestion_index].clear()
+				self.suggestion_visualizers.pop(suggestion_index)
+
+			self.current_suggestions.pop(suggestion_index)
+
+			if self.update_suggestion_callback:
+				suggestion_workflow = Workflow()
+				suggestion_workflow.strokes = list(self.current_suggestions)
+				self.update_suggestion_callback(suggestion_workflow)
+
+		except Exception as e:
+			print(f"Error rejecting suggestion: {e}")
+			import traceback
+
+			traceback.print_exc()
 
 	def cleanup(self):
 		self.stop_capture()

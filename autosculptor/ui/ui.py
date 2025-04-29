@@ -140,15 +140,20 @@ class SculptingPanel(QWidget):
 		self.delete_stroke_btn.setEnabled(False)
 		stroke_btns_layout.addWidget(self.delete_stroke_btn)
 
-		self.preview_clone_btn = QPushButton("Preview Clone")
-		self.preview_clone_btn.clicked.connect(self.on_preview_clone_clicked)
-		self.preview_clone_btn.setEnabled(False)
-		stroke_btns_layout.addWidget(self.preview_clone_btn)
+		self.clear_all_btn = QPushButton("Clear All")
+		self.clear_all_btn.clicked.connect(self.on_clear_all_clicked)
+		self.clear_all_btn.setEnabled(False)
+		stroke_btns_layout.addWidget(self.clear_all_btn)
 
-		self.accept_clone_btn = QPushButton("Accept Clone")
-		self.accept_clone_btn.clicked.connect(self.on_accept_clone_clicked)
-		self.accept_clone_btn.setEnabled(False)
-		stroke_btns_layout.addWidget(self.accept_clone_btn)
+		self.clone_stroke_btn = QPushButton("Clone Stroke")
+		self.clone_stroke_btn.clicked.connect(self.on_clone_stroke_clicked)
+		self.clone_stroke_btn.setEnabled(False)
+		stroke_btns_layout.addWidget(self.clone_stroke_btn)
+
+		self.cancel_clone_btn = QPushButton("Cancel Clone")
+		self.cancel_clone_btn.clicked.connect(self.cancel_clone_target_selection)
+		self.cancel_clone_btn.setVisible(False)
+		stroke_btns_layout.addWidget(self.cancel_clone_btn)
 
 		stroke_layout.addLayout(stroke_btns_layout)
 
@@ -170,10 +175,8 @@ class SculptingPanel(QWidget):
 		sample_buttons_layout = QHBoxLayout()
 		self.add_sample_btn = QPushButton("Add Sample")
 		self.remove_sample_btn = QPushButton("Remove Sample")
-		self.clear_samples_btn = QPushButton("Clear All")
 		sample_buttons_layout.addWidget(self.add_sample_btn)
 		sample_buttons_layout.addWidget(self.remove_sample_btn)
-		sample_buttons_layout.addWidget(self.clear_samples_btn)
 
 		sample_layout.addLayout(sample_buttons_layout)
 		sample_group.setLayout(sample_layout)
@@ -223,8 +226,10 @@ class SculptingPanel(QWidget):
 
 		if len(self.workflow.strokes) > 0:
 			self.delete_stroke_btn.setEnabled(True)
+			self.clone_stroke_btn.setEnabled(True)
 		else:
 			self.delete_stroke_btn.setEnabled(False)
+			self.clone_stroke_btn.setEnabled(False)
 
 	def update_sample_list(self, stroke):
 		"""
@@ -270,10 +275,12 @@ class SculptingPanel(QWidget):
 			finally:
 				self.clone_visualizer = None
 
-		# if self.pending_cloned_stroke:
-		# self.pending_cloned_stroke = None
+		if self.pending_cloned_stroke:
+			self.pending_cloned_stroke = None
 
-		self.accept_clone_btn.setEnabled(False)
+		self.clone_stroke_btn.setText("Clone Stroke")
+		self.clone_stroke_btn.setEnabled(len(self.stroke_list.selectedItems()) > 0)
+		self.cancel_clone_btn.setVisible(False)
 
 	def on_select_mesh(self):
 		if self.main_window and self.main_window.sculpt_capture:
@@ -368,14 +375,9 @@ class SculptingPanel(QWidget):
 			and self.main_window.sculpt_capture.is_capturing
 		)
 
-		can_preview_clone = (
-			is_capture_actually_on and len(self.stroke_list.selectedItems()) > 0
-		)
+		can_clone = is_capture_actually_on and len(self.stroke_list.selectedItems()) > 0
+		self.clone_stroke_btn.setEnabled(can_clone)
 
-		self.preview_clone_btn.setEnabled(can_preview_clone)
-		self.accept_clone_btn.setEnabled(
-			is_capture_actually_on and self.pending_cloned_stroke is not None
-		)
 		if not is_capture_actually_on:
 			self.clear_clone_preview_visualization()
 
@@ -415,7 +417,7 @@ class SculptingPanel(QWidget):
 			print(selected_row)
 			self.update_sample_list(self.workflow.strokes[selected_row])
 			self.delete_stroke_btn.setEnabled(True)
-			self.preview_clone_btn.setEnabled(True)
+			self.clone_stroke_btn.setEnabled(True)
 
 			if self.workflow:
 				selected_stroke = self.workflow.strokes[selected_row]
@@ -452,10 +454,18 @@ class SculptingPanel(QWidget):
 						self.history_visualizer = None
 		else:
 			self.delete_stroke_btn.setEnabled(False)
-			self.preview_clone_btn.setEnabled(False)
+			self.clone_stroke_btn.setEnabled(False)
 			self.sample_list.setRowCount(0)
 
-	def on_preview_clone_clicked(self):
+	def on_clone_stroke_clicked(self):
+		if self.clone_stroke_btn.text() == "Clone Stroke":
+			self._start_clone_preview_workflow()
+		elif self.clone_stroke_btn.text() == "Preview Clone":
+			pass
+		elif self.clone_stroke_btn.text() == "Accept Clone":
+			self._accept_cloned_stroke()
+
+	def _start_clone_preview_workflow(self):
 		if self.is_waiting_for_clone_target:
 			print(
 				"SculptingPanel: Already waiting for target selection. Cancelling previous request."
@@ -486,9 +496,9 @@ class SculptingPanel(QWidget):
 			return
 
 		self.is_waiting_for_clone_target = True
-		self.preview_clone_btn.setText("Waiting for Target...")
-		self.preview_clone_btn.setEnabled(False)
-		self.accept_clone_btn.setEnabled(False)
+		self.clone_stroke_btn.setText("Preview Clone")
+		self.clone_stroke_btn.setEnabled(False)
+		self.cancel_clone_btn.setVisible(True)
 		self.clear_clone_preview_visualization()
 		self.pending_cloned_stroke = None
 
@@ -508,6 +518,34 @@ class SculptingPanel(QWidget):
 		print(
 			f"SculptingPanel: Waiting for target vertex selection (Job ID: {self.target_selection_scriptJob})..."
 		)
+
+	def _accept_cloned_stroke(self):
+		if not self.pending_cloned_stroke:
+			om2.MGlobal.displayWarning("No clone preview available to accept.")
+			return
+
+		if not (
+			self.main_window
+			and self.main_window.sculpt_capture
+			and self.main_window.sculpt_capture.is_capturing
+		):
+			om2.MGlobal.displayWarning("Cannot accept clone: Capture is not active.")
+			return
+
+		print("SculptingPanel: Accepting cloned stroke...")
+
+		sc = self.main_window.sculpt_capture
+		try:
+			sc.apply_cloned_stroke(self.pending_cloned_stroke)
+
+			self.clear_clone_preview_visualization()
+			self.source_stroke_for_clone_index = None
+
+		except Exception as e:
+			print(f"SculptingPanel: Error accepting clone: {e}")
+			om2.MGlobal.displayError("Failed to apply cloned stroke.")
+			self.clear_clone_preview_visualization()
+			self.source_stroke_for_clone_index = None
 
 	def _kill_target_selection_scriptJob(self):
 		if self.target_selection_scriptJob:
@@ -529,13 +567,11 @@ class SculptingPanel(QWidget):
 		cmds.selectMode(object=True)
 		self.is_waiting_for_clone_target = False
 		self.source_stroke_for_clone_index = None
-		self.preview_clone_btn.setText("Preview Clone")
-		self.preview_clone_btn.setEnabled(len(self.stroke_list.selectedItems()) > 0)
+		self.clear_clone_preview_visualization()
 		cmds.inViewMessage(clear="midCenter")
 
 	def _handle_target_vertex_selection(self):
 		if not self.is_waiting_for_clone_target:
-			# print("  _handle_target_vertex_selection called but not waiting.")
 			return
 
 		selection = cmds.ls(selection=True, flatten=True)
@@ -548,8 +584,8 @@ class SculptingPanel(QWidget):
 		self._kill_target_selection_scriptJob()
 		self.is_waiting_for_clone_target = False
 		cmds.selectMode(object=True)
-		self.preview_clone_btn.setText("Preview Clone")
-		self.preview_clone_btn.setEnabled(True)
+		self.clone_stroke_btn.setText("Preview Clone")
+		self.clone_stroke_btn.setEnabled(True)
 
 		if not (self.main_window and self.main_window.sculpt_capture):
 			print("SculptingPanel: Capture system not available.")
@@ -614,7 +650,6 @@ class SculptingPanel(QWidget):
 			source_anchor_pos = source_stroke.samples[0].position
 			source_anchor_normal = source_stroke.samples[0].normal
 
-			# print("SculptingPanel: Requesting clone preview from synthesizer...")
 			cloned_workflow = sc.synthesizer.clone_workflow(
 				source_strokes=[source_stroke],
 				source_anchor_pos=source_anchor_pos,
@@ -631,17 +666,17 @@ class SculptingPanel(QWidget):
 					f"SculptingPanel: Clone preview generated with {len(self.pending_cloned_stroke.samples)} samples."
 				)
 
-				self.clear_clone_preview_visualization()
 				self.clone_visualizer = StrokeVisualizer(
 					self.pending_cloned_stroke,
 					color=self.CLONE_VIZ_COLOR,
 					transparency=self.CLONE_VIZ_TRANSPARENCY,
 				)
-				viz_radius = (
-					self.pending_cloned_stroke.brush_size * 0.5
-					if self.pending_cloned_stroke.brush_size
-					else 0.2
-				)
+				viz_radius = 0.2
+				if (
+					self.pending_cloned_stroke
+					and self.pending_cloned_stroke.brush_size is not None
+				):
+					viz_radius = self.pending_cloned_stroke.brush_size * 0.5
 				clone_viz_tube = self.clone_visualizer.visualize(viz_radius, 8)
 
 				cmds.select(clone_viz_tube)
@@ -649,11 +684,12 @@ class SculptingPanel(QWidget):
 				cmds.setAttr(f"{disp_layer}.displayType", 2)
 				cmds.select(None)
 
-				self.accept_clone_btn.setEnabled(True)
+				self.clone_stroke_btn.setText("Accept Clone")
+				self.clone_stroke_btn.setEnabled(True)
+				self.cancel_clone_btn.setVisible(True)
 			else:
 				om2.MGlobal.displayError("Failed to generate clone preview.")
-				self.pending_cloned_stroke = None
-				self.accept_clone_btn.setEnabled(False)
+				self.clear_clone_preview_visualization()
 
 		except Exception as e:
 			print(f"SculptingPanel: Error during target selection handling: {e}")
@@ -663,11 +699,7 @@ class SculptingPanel(QWidget):
 			om2.MGlobal.displayError("Error processing target selection.")
 			self.cancel_clone_target_selection()
 		finally:
-			self._kill_target_selection_scriptJob()
-			self.is_waiting_for_clone_target = False
-			self.preview_clone_btn.setText("Preview Clone")
-			is_stroke_selected = len(self.stroke_list.selectedItems()) > 0
-			self.preview_clone_btn.setEnabled(is_stroke_selected)
+			pass
 
 	def on_accept_clone_clicked(self):
 		if not self.pending_cloned_stroke:
@@ -701,6 +733,28 @@ class SculptingPanel(QWidget):
 			self.accept_clone_btn.setEnabled(False)
 			self.source_stroke_for_clone_index = None
 
+	def on_clear_all_clicked(self):
+		"""Clears the entire stroke history."""
+		print("SculptingPanel: Clearing all history...")
+		if self.main_window and self.main_window.sculpt_capture:
+			self.main_window.sculpt_capture.clear_history()
+			self.main_window.sculpt_capture.current_workflow = Workflow()
+			self.update(self.main_window.sculpt_capture.current_workflow)
+			self.sample_list.setRowCount(0)
+			self.clear_history_visualization()
+			self.clear_clone_preview_visualization()
+			self.delete_stroke_btn.setEnabled(False)
+			self.clone_stroke_btn.setEnabled(False)
+			om2.MGlobal.displayInfo("Stroke history cleared.")  # type: ignore
+		else:
+			self.update(Workflow())
+			self.sample_list.setRowCount(0)
+			self.clear_history_visualization()
+			self.clear_clone_preview_visualization()
+			self.delete_stroke_btn.setEnabled(False)
+			self.clone_stroke_btn.setEnabled(False)
+			print("SculptingPanel: Cleared UI history (capture inactive).")
+
 	def select(self, index):
 		pass
 
@@ -718,8 +772,8 @@ class SculptingPanel(QWidget):
 			self.on_stroke_selection_changed
 		)
 		self.delete_stroke_btn.clicked.disconnect(self.on_delete_stroke)
-		self.preview_clone_btn.clicked.disconnect(self.on_preview_clone_clicked)
-		self.accept_clone_btn.clicked.disconnect(self.on_accept_clone_clicked)
+		self.clone_stroke_btn.clicked.disconnect(self.on_clone_stroke_clicked)
+		self.clear_all_btn.clicked.disconnect(self.on_clear_all_clicked)
 
 		# TODO: Make sure to disconnect other signals here if we connect them later
 
@@ -797,12 +851,13 @@ class SuggestionPanel(QWidget):
 		button_layout = QHBoxLayout()
 		self.accept_sel_btn = QPushButton("Accept Selected")
 		self.accept_all_btn = QPushButton("Accept All")
-		self.recompute_btn = QPushButton("Recompute")
+		self.reject_sel_btn = QPushButton("Rejected Selected")
 		self.accept_sel_btn.clicked.connect(self.on_accept_sel_clicked)
 		self.accept_all_btn.clicked.connect(self.on_accept_all_clicked)
+		self.reject_sel_btn.clicked.connect(self.on_reject_sel_clicked)
 		button_layout.addWidget(self.accept_sel_btn)
 		button_layout.addWidget(self.accept_all_btn)
-		button_layout.addWidget(self.recompute_btn)
+		button_layout.addWidget(self.reject_sel_btn)
 
 		layout.addLayout(button_layout)
 		self.setLayout(layout)
@@ -836,6 +891,9 @@ class SuggestionPanel(QWidget):
 				row_position, 4, QTableWidgetItem(approx(stroke.brush_strength))
 			)
 		self.workflow = workflow
+
+		if self.stroke_list.rowCount() > 0:
+			self.stroke_list.selectRow(0)
 
 	def update_sample_list(self, stroke):
 		"""
@@ -876,7 +934,7 @@ class SuggestionPanel(QWidget):
 	def on_enable_prediction_changed(self, state):
 		is_enabled = state == Qt.Checked
 		# print(f"SuggestionPanel: Enable Prediction changed to: {is_enabled}")
-		self.recompute_btn.setEnabled(is_enabled)
+		self.reject_sel_btn.setEnabled(is_enabled)
 		self.accept_sel_btn.setEnabled(is_enabled)
 		self.accept_all_btn.setEnabled(is_enabled)
 		self.enable_auto_camera.setEnabled(is_enabled)
@@ -901,32 +959,6 @@ class SuggestionPanel(QWidget):
 				self.main_window.sculpt_capture.restore_previous_camera()
 		else:
 			print("SuggestionPanel: Capture instance not available for camera control.")
-
-	def on_recompute_clicked(self):
-		print("SuggestionPanel: Force Recompute clicked.")
-		if self.main_window and self.main_window.sculpt_capture:
-			sc = self.main_window.sculpt_capture
-			if sc.is_capturing and sc.suggestions_enabled:
-				if len(sc.current_workflow.strokes) > 1:
-					sc.generate_suggestions()
-				else:
-					om2.MGlobal.displayWarning(  # type: ignore
-						"Cannot recompute: No stroke history captured yet."
-					)
-					sc.clear_suggestions()
-			elif not sc.is_capturing:
-				om2.MGlobal.displayWarning(  # type: ignore
-					"Cannot recompute: History capture is not enabled."
-				)
-			else:
-				om2.MGlobal.displayWarning(  # type: ignore
-					"Cannot recompute: Suggestion generation is disabled."
-				)
-				sc.clear_suggestions()
-		else:
-			om2.MGlobal.displayWarning(  # type: ignore
-				"Cannot recompute: Capture system not initialized."
-			)
 
 	def on_accept_sel_clicked(self):
 		selection_index = self.stroke_list.selectedIndexes()[0].row()
@@ -954,6 +986,31 @@ class SuggestionPanel(QWidget):
 		else:
 			print("SuggestionPanel: No suggestions to accept or capture inactive.")
 
+	def on_reject_sel_clicked(self):
+		selected_indexes = self.stroke_list.selectedIndexes()
+		if not selected_indexes:
+			om2.MGlobal.displayWarning("Please select a suggestion to reject.")  # type: ignore
+			return
+
+		selection_index = selected_indexes[0].row()
+
+		if (
+			self.main_window
+			and self.main_window.sculpt_capture
+			and self.main_window.sculpt_capture.suggestions_enabled
+		):
+			self.main_window.sculpt_capture.reject_suggestion(selection_index)
+			if self.workflow and 0 <= selection_index < len(self.workflow.strokes):
+				del self.workflow.strokes[selection_index]
+				self.update(self.workflow)
+				self.sample_list.setRowCount(0)
+			else:
+				print(
+					f"SuggestionPanel: Error rejecting suggestion, invalid index {selection_index} or workflow missing."
+				)
+		else:
+			om2.MGlobal.displayWarning("Cannot reject: Capture inactive or suggestions disabled.")  # type: ignore
+
 	def cleanup(self):
 		"""Clean up resources."""
 		print("SuggestionPanel cleanup: Disconnecting signals.")
@@ -969,7 +1026,7 @@ class SuggestionPanel(QWidget):
 		)
 		self.accept_sel_btn.clicked.disconnect(self.on_accept_sel_clicked)
 		self.accept_all_btn.clicked.disconnect(self.on_accept_all_clicked)
-		# self.recompute_btn.clicked.disconnect(self.on_recompute_clicked)
+		self.reject_sel_btn.clicked.disconnect(self.on_reject_sel_clicked)
 
 		# TODO: Make sure to disconnect other signals here if we connect them later
 
