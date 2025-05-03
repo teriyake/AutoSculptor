@@ -1,7 +1,13 @@
 import maya.cmds as cmds  # type: ignore
+import maya.OpenMayaUI as omui
+import maya.OpenMaya as om
 import maya.api.OpenMaya as om2  # type: ignore
 import numpy as np
 import time
+
+import threading
+from pynput import mouse
+
 from typing import Optional, Tuple
 
 from autosculptor.core.data_structures import Sample, Stroke, Workflow
@@ -41,6 +47,82 @@ MAYA_BRUSH_TO_AUTOSCULPT_TYPE = {
 
 DEFAULT_BRUSH_TYPE = "surface"
 
+def screenToViewport(x, y):
+	# Obtain the active 3D view
+	view = omui.M3dView.active3dView()
+
+	# Prepare variables to store the screen position
+	x_util = om.MScriptUtil()
+	y_util = om.MScriptUtil()
+	x_ptr = x_util.asIntPtr()
+	y_ptr = y_util.asIntPtr()
+
+	# Get the screen position of the viewport
+	view.getScreenPosition(x_ptr, y_ptr)
+	vpx = om.MScriptUtil.getInt(x_ptr)
+	vpy = om.MScriptUtil.getInt(y_ptr)
+
+	# Get the viewport's width and height
+	width = view.portWidth()
+	height = view.portHeight()
+
+	localX = x - vpx
+	localY = height - y + vpy - 1.0
+	inside = localX < 0.0 or localX > width or localY < 0.0 or localY > height
+
+	return localX, localY, inside
+
+def viewportToObjSurf(mesh_name, vpx, vpy):
+	# Obtain the active 3D view
+	view = omui.M3dView.active3dView()
+
+	# Projection
+	pos = om.MPoint()
+	dir = om.MVector()
+	view.viewToWorld(int(vpx), int(vpy), pos, dir)
+
+	# Get the selected object
+	sel = om.MSelectionList()
+	sel.add(mesh_name)
+
+	# Prepare the MDagPath and MObject instances
+	dag_path = om.MDagPath()
+	component = om.MObject()
+
+	# Populate the dag_path and component with data from the selection list
+	sel.getDagPath(0, dag_path, component)
+	if not dag_path.hasFn(om.MFn.kMesh):
+		print("Selected object is not a mesh.")
+		return None
+
+	# Create a mesh function set
+	meshFn = om.MFnMesh(dag_path)
+
+	# Use the ray to find the closest intersection point on the mesh
+	hitPoint = om.MFloatPoint()
+	hit = meshFn.closestIntersection(
+		om.MFloatPoint(pos),
+		om.MFloatVector(dir),
+		None,
+		None,
+		False,
+		om.MSpace.kWorld,
+		999999,
+		False,
+		None,
+		hitPoint,
+		None,
+		None,
+		None,
+		None,
+		None
+	)
+
+	if hit:
+		return hitPoint
+	else:
+		print("No intersection found.")
+		return None
 
 def get_autosculpt_brush_type(maya_tool_name):
 	"""Infers AutoSculptor brush type from Maya tool name."""
@@ -102,6 +184,57 @@ class SculptCapture:
 		self.previous_camera_state: Optional[
 			Tuple[om2.MPoint, om2.MVector, om2.MVector]
 		] = None  # pos, lookat, up
+
+		# Mouse Event
+		self.left_pressed = False
+
+		listener_thread = threading.Thread(target=self.start_mouse_listener)
+		listener_thread.daemon = True  # Allows program to exit even if thread is running
+		listener_thread.start()
+
+
+		self.ctx = 'myDraggerContext'
+		'''
+		if cmds.contextInfo(self.ctx, exists=True):
+			cmds.deleteUI(self.ctx, toolContext=True)
+
+		# Dragger context mouse Test
+		#cmds.draggerContext(self.ctx, pressCommand=self.draggerContexTest, cursor='crossHair')
+		#cmds.setToolTo(self.ctx)
+		'''
+
+	def draggerContexTest(self):
+		# Get the 2D screen coordinates of the mouse click
+		vpX, vpY, _ = cmds.draggerContext(self.ctx, query=True, anchorPoint=True)
+
+		# Print the origin and direction of the ray
+		print(f"mousePos:({vpX}, {vpY})")
+
+	def start_mouse_listener(self):
+		with mouse.Listener(on_click=self.on_mouse_click, on_move=self.on_mouse_move) as listener:
+			listener.join()  # Keep the listener thread alive
+
+	def on_mouse_click(self, x, y, button, pressed):
+		if button == mouse.Button.left:
+			self.left_pressed = pressed
+
+	def on_mouse_move(self, x, y):
+		if self.left_pressed:
+			vpx, vpy, inside = screenToViewport(x, y)
+			print(f"Mouse Viewport Position: x={vpx}, y={vpy}")
+
+			hitPoint = viewportToObjSurf(self.mesh_name, vpx, vpy)
+
+			if hitPoint is not None:
+				print("Clicked point on mesh:", hitPoint)
+
+				# Create the sphere
+				#sphere = cmds.polySphere(name='mySphere', radius=1)[0]
+
+				# Move the sphere to the specified position
+				#cmds.move(hitPoint[0], hitPoint[1], hitPoint[2], sphere)
+
+
 
 	def get_world_space_positions(self, mesh_name):
 		"""Gets world-space vertex positions for a mesh by name."""
