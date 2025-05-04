@@ -65,11 +65,11 @@ def screenToViewport(x, y):
 	width = view.portWidth()
 	height = view.portHeight()
 
-	localX = x - vpx
-	localY = height - y + vpy - 1.0
-	inside = localX < 0.0 or localX > width or localY < 0.0 or localY > height
+	local_x = x - vpx
+	local_y = height - y + vpy - 1.0
+	inside = 0.0 < local_x < width and 0.0 < local_y < height
 
-	return localX, localY, inside
+	return local_x, local_y, inside
 
 def viewportToObjSurf(mesh_name, vpx, vpy):
 	# Obtain the active 3D view
@@ -185,75 +185,85 @@ class SculptCapture:
 		] = None  # pos, lookat, up
 
 		# Mouse Event
-		self.left_pressed = False
+		self.recording = False
 		self.listener = None
-
-		self.ctx = 'myDraggerContext'
-		'''
-		if cmds.contextInfo(self.ctx, exists=True):
-			cmds.deleteUI(self.ctx, toolContext=True)
-
-		# Dragger context mouse Test
-		#cmds.draggerContext(self.ctx, pressCommand=self.draggerContexTest, cursor='crossHair')
-		#cmds.setToolTo(self.ctx)
-		'''
-
-	def draggerContexTest(self):
-		# Get the 2D screen coordinates of the mouse click
-		vpX, vpY, _ = cmds.draggerContext(self.ctx, query=True, anchorPoint=True)
-
-		# Print the origin and direction of the ray
-		# print(f"mousePos:({vpX}, {vpY})")
 
 	def on_mouse_click(self, x, y, button, pressed):
 		if button == mouse.Button.left:
+			# Test if Brushing
+			vpx, vpy, inside = screenToViewport(x, y)
+			if not inside:
+				return
+			hit_point = viewportToObjSurf(self.mesh_name, vpx, vpy)
+			if hit_point is None:
+				return
 
+			# Recording
 			if pressed:
-				print("StartRecording")
+				tool_name = self.get_active_sculpt_tool()
+				if not tool_name:
+					return
+
+				# tool_actual_name = get_tool_name_deferred(get_tool_name_callback)
+				tool_actual_name = get_tool_name_main_thread()
+				if tool_actual_name is not None:
+					tool_actual_name = tool_actual_name.split(" ", 1)[0]
+				brush_params = self.get_brush_size_and_pressure(tool_name)
+				if brush_params is None:
+					return
+				brush_size, brush_pressure = brush_params
+
 				current_stroke = Stroke()
+				current_stroke.stroke_type = get_autosculpt_brush_type(tool_actual_name)
+				current_stroke.brush_size = brush_size
+				current_stroke.brush_strength = brush_pressure
+				current_stroke.brush_mode = get_autosculpt_brush_mode(
+					tool_name, tool_actual_name
+				).name
+				current_stroke.brush_falloff = "smooth"  # TODO:
+
 				self.active_stroke_in_progress = current_stroke
-			else:
-				print("EndRecording")
+
+				# Record Status
+				self.recording = True
+				print("StartRecording")
+			elif self.recording:
 				self.active_stroke_in_progress.samples = self.active_stroke_in_progress.samples[0::10]
-				viz = StrokeVisualizer(self.active_stroke_in_progress)
-				viz.visualize(0.5, 8)
+				self.current_workflow.add_stroke(self.active_stroke_in_progress)
+				if self.update_history_callback:
+					self.update_history_callback(self.copy_workflow())
+				#viz = StrokeVisualizer(self.active_stroke_in_progress)
+				#viz.visualize(0.5, 8)
 				# self.active_stroke_in_progress = None
 
-			# Record Pressed Status
-			self.left_pressed = pressed
-
+				# Record Status
+				self.recording = False
+				print("EndRecording")
 
 
 	def on_mouse_move(self, x, y):
-		if self.left_pressed:
+		if self.recording:
 			vpx, vpy, inside = screenToViewport(x, y)
 			#print(f"Mouse Viewport Position: x={vpx}, y={vpy}")
-
+			if not inside:
+				return
 			hit_point = viewportToObjSurf(self.mesh_name, vpx, vpy)
 
 			if hit_point is not None:
 				#print(f"Hit point on mesh: ({hit_point[0]}, {hit_point[1]}, {hit_point[2]})", hit_point)
 				hit_point = np.array([hit_point[0], hit_point[1], hit_point[2]])
-				if self.active_stroke_in_progress is None:
-					return
+				brush_params = self.get_brush_size_and_pressure(self.get_active_sculpt_tool())
+				brush_size, brush_pressure = brush_params
 
 				sample = Sample(
 					position=hit_point,
-					normal=hit_point,
-					size=0.0,
-					pressure=0.0,
+					normal=np.array([0.0, 1.0, 0.0]),
+					size=brush_size,
+					pressure=brush_pressure,
 					timestamp=0.0,
 				)
 	
 				self.active_stroke_in_progress.add_sample(sample)
-
-
-				# Create the sphere
-				#sphere = cmds.polySphere(name='mySphere', radius=1)[0]
-
-				# Move the sphere to the specified position
-				#cmds.move(hit_point[0], hit_point[1], hit_point[2], sphere)
-
 
 
 	def get_world_space_positions(self, mesh_name):

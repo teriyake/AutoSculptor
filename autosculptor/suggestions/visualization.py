@@ -131,8 +131,7 @@ class StrokeVisualizer:
 			return None
 
 		# Store the original selection
-		# original_selection = cmds.ls(selection=True, long=True) or []
-		original_selection = []
+		original_selection = cmds.ls(selection=True, long=True) or []
 
 		tube = self.create_tube(positions, radius, sections)
 
@@ -152,7 +151,7 @@ class StrokeVisualizer:
 					)
 		except Exception as e:
 			print(f"StrokeVisualizer: Warning! Failed to restore selection: {e}")
-			# cmds.select(clear=True)
+			cmds.select(clear=True)
 
 		return tube
 
