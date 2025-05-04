@@ -98,7 +98,9 @@ def viewportToObjSurf(mesh_name, vpx, vpy):
 	meshFn = om.MFnMesh(dag_path)
 
 	# Use the ray to find the closest intersection point on the mesh
-	hitPoint = om.MFloatPoint()
+	hit_point = om.MFloatPoint()
+	hit_face = om.MScriptUtil().asIntPtr()
+
 	hit = meshFn.closestIntersection(
 		om.MFloatPoint(pos),
 		om.MFloatVector(dir),
@@ -109,19 +111,23 @@ def viewportToObjSurf(mesh_name, vpx, vpy):
 		999999,
 		False,
 		None,
-		hitPoint,
+		hit_point,
 		None,
-		None,
+		hit_face,
 		None,
 		None,
 		None
 	)
 
+
 	if hit:
-		return hitPoint
+		face_idx = om.MScriptUtil(hit_face).asInt()
+		hit_normal = om.MVector()
+		meshFn.getPolygonNormal(face_idx, hit_normal, om.MSpace.kWorld)
+		return hit_point, hit_normal
 	else:
-		print("No intersection found.")
-		return None
+		#print("No intersection found.")
+		return None, None
 
 def get_autosculpt_brush_type(maya_tool_name):
 	"""Infers AutoSculptor brush type from Maya tool name."""
@@ -190,15 +196,35 @@ class SculptCapture:
 
 	def on_mouse_click(self, x, y, button, pressed):
 		if button == mouse.Button.left:
+			# End Recording
+			if not pressed and self.recording:
+				current_stroke = self.active_stroke_in_progress
+				current_stroke.samples = current_stroke.samples[0::10]
+				if len(current_stroke.samples) < 4:
+					self.active_stroke_in_progress = None
+					self.recording = False
+					print("Ignore Recording")
+					return
+
+
+				self.current_workflow.add_stroke(current_stroke)
+				if self.update_history_callback:
+					self.update_history_callback(self.copy_workflow())
+
+				# Record Status
+				self.recording = False
+				print("EndRecording")
+
+
 			# Test if Brushing
 			vpx, vpy, inside = screenToViewport(x, y)
 			if not inside:
 				return
-			hit_point = viewportToObjSurf(self.mesh_name, vpx, vpy)
+			hit_point, hit_normal = viewportToObjSurf(self.mesh_name, vpx, vpy)
 			if hit_point is None:
 				return
 
-			# Recording
+			# Start Recording
 			if pressed:
 				tool_name = self.get_active_sculpt_tool()
 				if not tool_name:
@@ -227,18 +253,6 @@ class SculptCapture:
 				# Record Status
 				self.recording = True
 				print("StartRecording")
-			elif self.recording:
-				self.active_stroke_in_progress.samples = self.active_stroke_in_progress.samples[0::10]
-				self.current_workflow.add_stroke(self.active_stroke_in_progress)
-				if self.update_history_callback:
-					self.update_history_callback(self.copy_workflow())
-				#viz = StrokeVisualizer(self.active_stroke_in_progress)
-				#viz.visualize(0.5, 8)
-				# self.active_stroke_in_progress = None
-
-				# Record Status
-				self.recording = False
-				print("EndRecording")
 
 
 	def on_mouse_move(self, x, y):
@@ -247,20 +261,22 @@ class SculptCapture:
 			#print(f"Mouse Viewport Position: x={vpx}, y={vpy}")
 			if not inside:
 				return
-			hit_point = viewportToObjSurf(self.mesh_name, vpx, vpy)
+			hit_point, hit_normal = viewportToObjSurf(self.mesh_name, vpx, vpy)
 
 			if hit_point is not None:
 				#print(f"Hit point on mesh: ({hit_point[0]}, {hit_point[1]}, {hit_point[2]})", hit_point)
 				hit_point = np.array([hit_point[0], hit_point[1], hit_point[2]])
+				hit_normal = np.array([hit_normal[0], hit_normal[1], hit_normal[2]])
+
 				brush_params = self.get_brush_size_and_pressure(self.get_active_sculpt_tool())
 				brush_size, brush_pressure = brush_params
 
 				sample = Sample(
 					position=hit_point,
-					normal=np.array([0.0, 1.0, 0.0]),
+					normal=hit_normal,
 					size=brush_size,
 					pressure=brush_pressure,
-					timestamp=0.0,
+					timestamp=time.time(),
 				)
 	
 				self.active_stroke_in_progress.add_sample(sample)
