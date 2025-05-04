@@ -198,6 +198,9 @@ class SculptCapture:
 
 	def on_mouse_click(self, x, y, button, pressed):
 		if button == mouse.Button.left:
+			if cmds.getModifiers() & 8 != 0:
+				return  # ignore Alt + LMB (camera control)
+
 			# End Recording
 			if not pressed and self.recording:
 				current_stroke = self.active_stroke_in_progress
