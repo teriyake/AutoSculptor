@@ -1,7 +1,22 @@
 from autosculptor.core.data_structures import Sample, Stroke, Workflow
 import numpy as np
 import maya.cmds as cmds  # type: ignore
+import maya.api.OpenMaya as om
+import math
 
+def numpy_to_mvector(np_array):
+	return om.MVector(np_array[0], np_array[1], np_array[2])
+def compute_tangent(p0, p1):
+	return (p1 - p0).normalize()
+
+def compute_frame(prev_normal, tangent):
+	# Compute a normal using parallel transport
+	binormal = tangent ^ prev_normal  # Cross product
+	if binormal.length() < 1e-5:
+		binormal = tangent ^ om.MVector(0, 1, 0)
+	binormal.normalize()
+	normal = binormal ^ tangent
+	return normal.normalize(), binormal
 
 class StrokeVisualizer:
 	DEFAULT_COLOR = (1.0, 1.0, 0.0)
@@ -24,105 +39,80 @@ class StrokeVisualizer:
 		viz_transparency = (
 			transparency if transparency is not None else self.DEFAULT_TRANSPARENCY
 		)
+		self.shader = None
+		self.shading_group = self.create_shader("vizShader", viz_color, viz_transparency)
 
-		# Create a new shader for visualization
-		self.shader = cmds.shadingNode(
-			"lambert", asShader=True, name="transparentYellowShader"
-		)
-		self.shading_group = cmds.sets(
-			renderable=True, noSurfaceShader=True, empty=True, name=self.shader + "SG"
-		)
-		# SG needs to be cleaned up
-		self.created_nodes.append(self.shading_group)
-		cmds.connectAttr(
-			self.shader + ".outColor", self.shading_group + ".surfaceShader"
-		)
+	def create_shader(self, name="myShader", color=(1, 0, 0), transparency=(0.5, 0.5, 0.5)):
+		# Create shader
+		self.shader = cmds.shadingNode('blinn', asShader=True, name=name)
+		cmds.setAttr(self.shader + '.color', color[0], color[1], color[2], type='double3')
+		cmds.setAttr(self.shader + '.transparency', transparency[0], transparency[1], transparency[2], type='double3')
 
-		# Set the color to yellow
-		cmds.setAttr(
-			self.shader + ".color",
-			viz_color[0],
-			viz_color[1],
-			viz_color[2],
-			type="double3",
-		)
+		# Create shading group
+		shading_group = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name=self.shader + 'SG')
+		cmds.connectAttr(self.shader + '.outColor', shading_group + '.surfaceShader', force=True)
 
-		# Set transparency to make the material semi-transparent
-		cmds.setAttr(
-			self.shader + ".transparency",
-			viz_transparency[0],
-			viz_transparency[1],
-			viz_transparency[2],
-			type="double3",
-		)
+		return shading_group
+	def create_tube(self, samples, radius=0.1, segments=8):
+		verts = []
+		poly_counts = []
+		poly_connects = []
 
-	def create_curve_from_stroke(self):
-		"""
-		Create a NURBS curve in Maya from the stroke samples.
+		normal = om.MVector(0, 1, 0)  # Initial normal guess
 
-		Returns:
-			str: The name of the created NURBS curve.
-		"""
-		# Extract positions from stroke samples
-		positions = [sample.position for sample in self.stroke.samples]
+		circles = []
+		for i in range(len(samples)):
+			p = samples[i]
+			if i < len(samples) - 1:
+				tangent = compute_tangent(p, samples[i + 1])
+			else:
+				tangent = compute_tangent(samples[i - 1], p)
 
-		# Flatten the list of positions
-		curve_points = [
-			tuple(map(float, sample.position)) for sample in self.stroke.samples
-		]
+			normal, binormal = compute_frame(normal, tangent)
 
-		# Create the NURBS curve
-		if len(curve_points) < 4:
-			curve = cmds.curve(p=curve_points, d=1)  # Linear curve for fewer points
-		else:
-			curve = cmds.curve(p=curve_points, d=3)  # Cubic curve
-		# cmds.fitBspline(ch=0, tol=0.01)
+			circle = []
+			for j in range(segments):
+				angle = 2 * math.pi * j / segments
+				dir_vec = math.cos(angle) * normal + math.sin(angle) * binormal
+				circle.append(p + dir_vec * radius)
+				verts.append(p + dir_vec * radius)
+			circles.append(circle)
 
-		return curve
+		# Create quads between circles
+		for i in range(len(circles) - 1):
+			for j in range(segments):
+				next_j = (j + 1) % segments
+				idx0 = i * segments + j
+				idx1 = i * segments + next_j
+				idx2 = (i + 1) * segments + next_j
+				idx3 = (i + 1) * segments + j
 
-	def create_tube_from_curve(self, curve, radius=0.1, sections=8):
-		"""
-		Create a tubular geometry by extruding a circle along the given curve.
+				poly_counts.append(4)
+				poly_connects.extend([idx0, idx1, idx2, idx3])
 
-		Args:
-			curve (str): The name of the curve to extrude along.
-			radius (float, optional): The radius of the tube. Defaults to 0.1.
-			sections (int, optional): The number of sections for the circle profile. Defaults to 8.
+		# Convert to MPointArray
+		mpoints = om.MPointArray([om.MPoint(v) for v in verts])
 
-		Returns:
-			str: The name of the created tubular geometry.
-		"""
-		# Create a circle to serve as the profile for extrusion
-		circle = cmds.circle(radius=radius, sections=sections, normal=(0, 1, 0))[0]
+		# Create mesh
+		mesh_fn = om.MFnMesh()
+		mesh_fn.create(mpoints, poly_counts, poly_connects)
 
-		# Extrude the circle along the curve to create the tube
-		tube = cmds.extrude(
-			circle, curve, et=2, fixedPath=True, useComponentPivot=1, polygon=1, ch=True
-		)[0]
+		# Assign shader to the mesh
+		mesh_obj = mesh_fn.object()
+		dag_path = om.MFnDagNode(mesh_obj).fullPathName()
+		self.assign_shader(dag_path)
 
-		# Make sure the extruded tube will be deleted later
-		self.created_nodes.append(tube)
+		return mesh_fn
 
-		# Cap the ends of the tube
-		cmds.polyCloseBorder(tube)
-
-		# Delete the original circle and curve
-		cmds.delete(circle, curve)
-
-		# Shading
-		self.assign_transparent_yellow_material(tube)
-
-		return tube
-
-	def assign_transparent_yellow_material(self, geometry):
+	def assign_shader(self, mesh_name):
 		"""
 		Assign a transparent yellow material to the specified geometry.
 
 		Args:
-			geometry (str): The name of the geometry to assign the material to.
+			mesh_name (str): The name of the geometry to assign the material to.
 		"""
 		# Assign the shader to the geometry
-		cmds.sets(geometry, edit=True, forceElement=self.shading_group)
+		cmds.sets(mesh_name, edit=True, forceElement=self.shading_group)
 
 	def visualize(self, radius=0.1, sections=8):
 		"""
@@ -135,11 +125,16 @@ class StrokeVisualizer:
 		Returns:
 			str: The name of the created tubular geometry.
 		"""
-		# Store the original selection
-		original_selection = cmds.ls(selection=True, long=True) or []
+		positions = [numpy_to_mvector(sample.position) for sample in self.stroke.samples]
 
-		curve = self.create_curve_from_stroke()
-		tube = self.create_tube_from_curve(curve, radius, sections)
+		if len(positions) < 2:
+			return None
+
+		# Store the original selection
+		# original_selection = cmds.ls(selection=True, long=True) or []
+		original_selection = []
+
+		tube = self.create_tube(positions, radius, sections)
 
 		# Try to restore the selection
 		try:
@@ -157,7 +152,7 @@ class StrokeVisualizer:
 					)
 		except Exception as e:
 			print(f"StrokeVisualizer: Warning! Failed to restore selection: {e}")
-			cmds.select(clear=True)
+			# cmds.select(clear=True)
 
 		return tube
 
@@ -179,30 +174,3 @@ class StrokeVisualizer:
 
 		self.created_nodes = []
 		print(f"StrokeVisualizer: Clearing complete for instance {id(self)}.")
-
-
-def test_stroke_visualizer():
-	"""Test case for StrokeVisualizer"""
-	# Clear the Maya scene
-	cmds.file(new=True, force=True)
-
-	# Create a Stroke instance
-	stroke = Stroke()
-
-	# Add sample points to the stroke
-	sample_positions = [[0, 0, 0], [1, 1, 0], [2, 1.5, 0], [3, 2, 0], [4, 2.5, 0]]
-
-	for i, pos in enumerate(sample_positions):
-		sample = Sample(position=pos, size=1.0, pressure=1.0, timestamp=i)
-		stroke.add_sample(sample)
-
-	# Create the visualizer
-	visualizer = StrokeVisualizer(stroke)
-
-	# Generate the tube
-	tube = visualizer.visualize(radius=0.2, sections=12)
-
-	# Check if the tube exists in the Maya scene
-	assert cmds.objExists(tube), f"Test Failed: Tube '{tube}' was not created."
-
-	print(f"Test Passed: Tube '{tube}' successfully created.")

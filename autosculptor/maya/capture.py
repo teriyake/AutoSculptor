@@ -5,7 +5,6 @@ import maya.api.OpenMaya as om2  # type: ignore
 import numpy as np
 import time
 
-import threading
 from pynput import mouse
 
 from typing import Optional, Tuple
@@ -187,11 +186,7 @@ class SculptCapture:
 
 		# Mouse Event
 		self.left_pressed = False
-
-		listener_thread = threading.Thread(target=self.start_mouse_listener)
-		listener_thread.daemon = True  # Allows program to exit even if thread is running
-		listener_thread.start()
-
+		self.listener = None
 
 		self.ctx = 'myDraggerContext'
 		'''
@@ -208,31 +203,56 @@ class SculptCapture:
 		vpX, vpY, _ = cmds.draggerContext(self.ctx, query=True, anchorPoint=True)
 
 		# Print the origin and direction of the ray
-		print(f"mousePos:({vpX}, {vpY})")
-
-	def start_mouse_listener(self):
-		with mouse.Listener(on_click=self.on_mouse_click, on_move=self.on_mouse_move) as listener:
-			listener.join()  # Keep the listener thread alive
+		# print(f"mousePos:({vpX}, {vpY})")
 
 	def on_mouse_click(self, x, y, button, pressed):
 		if button == mouse.Button.left:
+
+			if pressed:
+				print("StartRecording")
+				current_stroke = Stroke()
+				self.active_stroke_in_progress = current_stroke
+			else:
+				print("EndRecording")
+				self.active_stroke_in_progress.samples = self.active_stroke_in_progress.samples[0::10]
+				viz = StrokeVisualizer(self.active_stroke_in_progress)
+				viz.visualize(0.5, 8)
+				# self.active_stroke_in_progress = None
+
+			# Record Pressed Status
 			self.left_pressed = pressed
+
+
 
 	def on_mouse_move(self, x, y):
 		if self.left_pressed:
 			vpx, vpy, inside = screenToViewport(x, y)
-			print(f"Mouse Viewport Position: x={vpx}, y={vpy}")
+			#print(f"Mouse Viewport Position: x={vpx}, y={vpy}")
 
-			hitPoint = viewportToObjSurf(self.mesh_name, vpx, vpy)
+			hit_point = viewportToObjSurf(self.mesh_name, vpx, vpy)
 
-			if hitPoint is not None:
-				print("Clicked point on mesh:", hitPoint)
+			if hit_point is not None:
+				#print(f"Hit point on mesh: ({hit_point[0]}, {hit_point[1]}, {hit_point[2]})", hit_point)
+				hit_point = np.array([hit_point[0], hit_point[1], hit_point[2]])
+				if self.active_stroke_in_progress is None:
+					return
+
+				sample = Sample(
+					position=hit_point,
+					normal=hit_point,
+					size=0.0,
+					pressure=0.0,
+					timestamp=0.0,
+				)
+	
+				self.active_stroke_in_progress.add_sample(sample)
+
 
 				# Create the sphere
 				#sphere = cmds.polySphere(name='mySphere', radius=1)[0]
 
 				# Move the sphere to the specified position
-				#cmds.move(hitPoint[0], hitPoint[1], hitPoint[2], sphere)
+				#cmds.move(hit_point[0], hit_point[1], hit_point[2], sphere)
 
 
 
@@ -821,52 +841,13 @@ class SculptCapture:
 			print(f"Error restoring previous camera state: {e}")
 
 	def start_capture(self):
-		if self.script_job_number is not None:
-			return
-
-		if not self.mesh_name:
-			print("Cannot start capture: No mesh selected.")
-
-			selected = self.get_selected_mesh_name()
-			if not selected:
-				om2.MGlobal.displayError(
-					"Please select a mesh before starting capture."
-				)
-				return
-			self.mesh_name = selected
-
-		self.previous_positions[self.mesh_name] = self.get_world_space_positions(
-			self.mesh_name
-		)
-
-		self.script_job_number = cmds.scriptJob(
-			event=["idle", self.process_mesh_changes],
-			killWithScene=True,
-		)
-		self.is_capturing = True
-		print(
-			f"SculptCapture: Capture started. Registered script job: {self.script_job_number} for mesh: {self.mesh_name}"
-		)
+		self.listener = mouse.Listener(on_click=self.on_mouse_click, on_move=self.on_mouse_move)
+		self.listener.start()
 
 	def stop_capture(self):
-		if self.script_job_number is not None:
-			try:
-				cmds.scriptJob(kill=self.script_job_number, force=True)
-				print(f"Killed script job {self.script_job_number}")
-			except Exception as e:
-				print(f"Error killing script job {self.script_job_number}: {e}")
-			finally:
-				self.script_job_number = None
-				self.is_capturing = False
-
-				if self.mesh_name in self.previous_positions:
-					del self.previous_positions[self.mesh_name]
-				self.clear_suggestions()
-				self.previous_camera_state = None
-				self.clear_clone_preview_visualization()
-				print("Capture stopped.")
-		else:
-			print("Capture not running.")
+		if self.listener is not None:
+			self.listener.stop()
+			self.listener = None
 
 	def register_script_job(self):
 		"""Registers a script job to monitor for changes after sculpting."""
