@@ -4,10 +4,14 @@ import maya.cmds as cmds  # type: ignore
 import maya.api.OpenMaya as om
 import math
 
+
 def numpy_to_mvector(np_array):
 	return om.MVector(np_array[0], np_array[1], np_array[2])
+
+
 def compute_tangent(p0, p1):
 	return (p1 - p0).normalize()
+
 
 def compute_frame(prev_normal, tangent):
 	# Compute a normal using parallel transport
@@ -17,6 +21,7 @@ def compute_frame(prev_normal, tangent):
 	binormal.normalize()
 	normal = binormal ^ tangent
 	return normal.normalize(), binormal
+
 
 class StrokeVisualizer:
 	DEFAULT_COLOR = (1.0, 1.0, 0.0)
@@ -40,20 +45,43 @@ class StrokeVisualizer:
 			transparency if transparency is not None else self.DEFAULT_TRANSPARENCY
 		)
 		self.shader = None
-		self.shading_group = self.create_shader("vizShader", viz_color, viz_transparency)
+		self.shading_group = self.create_shader(
+			"vizShader", viz_color, viz_transparency
+		)
 
-	def create_shader(self, name="myShader", color=(1, 0, 0), transparency=(0.5, 0.5, 0.5)):
+	def create_shader(
+		self,
+		name="Autosculptor_VizTubeShader",
+		color=(1, 0, 0),
+		transparency=(0.5, 0.5, 0.5),
+	):
 		# Create shader
-		self.shader = cmds.shadingNode('blinn', asShader=True, name=name)
-		cmds.setAttr(self.shader + '.color', color[0], color[1], color[2], type='double3')
-		cmds.setAttr(self.shader + '.transparency', transparency[0], transparency[1], transparency[2], type='double3')
+		self.shader = cmds.shadingNode("blinn", asShader=True, name=name)
+		self.created_nodes.append(self.shader)
+		cmds.setAttr(
+			self.shader + ".color", color[0], color[1], color[2], type="double3"
+		)
+		cmds.setAttr(
+			self.shader + ".transparency",
+			transparency[0],
+			transparency[1],
+			transparency[2],
+			type="double3",
+		)
 
 		# Create shading group
-		shading_group = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name=self.shader + 'SG')
-		cmds.connectAttr(self.shader + '.outColor', shading_group + '.surfaceShader', force=True)
+		shading_group = cmds.sets(
+			renderable=True, noSurfaceShader=True, empty=True, name=self.shader + "SG"
+		)
+		self.created_nodes.append(shading_group)
+		cmds.connectAttr(
+			self.shader + ".outColor", shading_group + ".surfaceShader", force=True
+		)
 
 		return shading_group
+
 	def create_tube(self, samples, radius=0.1, segments=8):
+		"""Creates the tube mesh geometry and returns its transform node name."""
 		verts = []
 		poly_counts = []
 		poly_connects = []
@@ -101,8 +129,9 @@ class StrokeVisualizer:
 		mesh_obj = mesh_fn.object()
 		dag_path = om.MFnDagNode(mesh_obj).fullPathName()
 		self.assign_shader(dag_path)
+		self.created_nodes.append(dag_path)
 
-		return mesh_fn
+		return dag_path
 
 	def assign_shader(self, mesh_name):
 		"""
@@ -125,7 +154,9 @@ class StrokeVisualizer:
 		Returns:
 			str: The name of the created tubular geometry.
 		"""
-		positions = [numpy_to_mvector(sample.position) for sample in self.stroke.samples]
+		positions = [
+			numpy_to_mvector(sample.position) for sample in self.stroke.samples
+		]
 
 		if len(positions) < 2:
 			return None

@@ -103,9 +103,12 @@ class SculptingPanel(QWidget):
 	CLONE_VIZ_COLOR = (0.0, 1.0, 0.5)
 	CLONE_VIZ_TRANSPARENCY = (0.6, 0.6, 0.6)
 
+	VIZ_LAYER_NAME = "AutoSculptor_VizLayer"
+
 	def __init__(self, main_window_ref, parent=None):
 		super().__init__(parent)
 		self.main_window = main_window_ref
+		self.viz_display_layer = None
 		layout = QVBoxLayout()
 
 		# Mesh Selection
@@ -341,7 +344,7 @@ class SculptingPanel(QWidget):
 
 	def on_enable_capture_changed(self, state):
 		if self.main_window:
-			if state == Qt.Checked:
+			if state == Qt.Checked:  # use Qt.CheckState.Checked.value for PySide6
 				if not self.main_window.sculpt_capture:
 					print("SculptingPanel: Enabling capture...")
 
@@ -437,10 +440,26 @@ class SculptingPanel(QWidget):
 							else 0.2
 						)
 						hist_viz_tube = self.history_visualizer.visualize(viz_radius, 8)
-						cmds.select(hist_viz_tube)
-						disp_layer = cmds.createDisplayLayer()
-						cmds.setAttr(f"{disp_layer}.displayType", 2)
-						cmds.select(None)
+						if hist_viz_tube:
+							if not self.viz_display_layer or not cmds.objExists(
+								self.viz_display_layer
+							):
+								self.viz_display_layer = cmds.createDisplayLayer(
+									name=self.VIZ_LAYER_NAME, number=1, empty=True
+								)
+								cmds.setAttr(f"{self.viz_display_layer}.displayType", 2)
+								print(
+									f"SculptingPanel: Created display layer: {self.viz_display_layer}"
+								)
+
+							cmds.editDisplayLayerMembers(
+								self.viz_display_layer, hist_viz_tube, noRecurse=True
+							)
+							# print(f"SculptingPanel: Added {hist_viz_tube} to layer {self.viz_display_layer}")
+						else:
+							print(
+								f"SculptingPanel: Failed to create history visualization for stroke {selected_row}"
+							)
 					except ValueError as ve:
 						print(
 							f"SculptingPanel: Cannot visualize stroke {selected_row}: {ve}"
@@ -681,10 +700,26 @@ class SculptingPanel(QWidget):
 					viz_radius = self.pending_cloned_stroke.brush_size * 0.5
 				clone_viz_tube = self.clone_visualizer.visualize(viz_radius, 8)
 
-				cmds.select(clone_viz_tube)
-				disp_layer = cmds.createDisplayLayer()
-				cmds.setAttr(f"{disp_layer}.displayType", 2)
-				cmds.select(None)
+				if clone_viz_tube:
+					if not self.viz_display_layer or not cmds.objExists(
+						self.viz_display_layer
+					):
+						self.viz_display_layer = cmds.createDisplayLayer(
+							name=self.VIZ_LAYER_NAME, number=1, empty=True
+						)
+						cmds.setAttr(f"{self.viz_display_layer}.displayType", 2)
+						print(
+							f"SculptingPanel: Created display layer: {self.viz_display_layer}"
+						)
+
+					cmds.editDisplayLayerMembers(
+						self.viz_display_layer, clone_viz_tube, noRecurse=True
+					)
+					print(
+						f"SculptingPanel: Added {clone_viz_tube} to layer {self.viz_display_layer}"
+					)
+				else:
+					print(f"SculptingPanel: Failed to create clone visualization")
 
 				self.clone_stroke_btn.setText("Accept Clone")
 				self.clone_stroke_btn.setEnabled(True)
@@ -767,6 +802,17 @@ class SculptingPanel(QWidget):
 		self.clear_history_visualization()
 		self.clear_clone_preview_visualization()
 		self._kill_target_selection_scriptJob()
+
+		if self.viz_display_layer and cmds.objExists(self.viz_display_layer):
+			try:
+				print(
+					f"SculptingPanel cleanup: Deleting display layer {self.viz_display_layer}"
+				)
+				cmds.delete(self.viz_display_layer)
+				self.viz_display_layer = None
+			except Exception as e:
+				print(f"SculptingPanel cleanup: Error deleting display layer: {e}")
+
 		cmds.selectMode(object=True)
 		self.mesh_button.clicked.disconnect(self.on_select_mesh)
 		self.enable_capture.stateChanged.disconnect(self.on_enable_capture_changed)
