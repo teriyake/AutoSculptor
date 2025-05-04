@@ -1,4 +1,4 @@
-from PySide2.QtWidgets import (  # type: ignore
+from PySide6.QtWidgets import (  # type: ignore
 	QDialog,
 	QVBoxLayout,
 	QLabel,
@@ -16,10 +16,10 @@ from PySide2.QtWidgets import (  # type: ignore
 	QMessageBox,
 	QAbstractItemView,
 )
-from PySide2.QtCore import Qt  # type: ignore
+from PySide6.QtCore import Qt  # type: ignore
 import maya.OpenMayaUI as omui  # type: ignore
 import maya.api.OpenMaya as om2  # type: ignore
-from shiboken2 import wrapInstance  # type: ignore
+from shiboken6 import wrapInstance  # type: ignore
 import maya.cmds as cmds  # type: ignore
 from maya.app.general.mayaMixin import MayaQWidgetDockableMixin  # type: ignore
 import numpy as np
@@ -38,7 +38,7 @@ from typing import Optional
 
 def get_maya_main_window():
 	main_window_ptr = omui.MQtUtil.mainWindow()
-	return wrapInstance(int(main_window_ptr), QDialog)
+	return wrapInstance(int(main_window_ptr), QWidget)
 
 
 def generate_random_sample():
@@ -105,9 +105,9 @@ class SculptingPanel(QWidget):
 
 	VIZ_LAYER_NAME = "AutoSculptor_VizLayer"
 
-	def __init__(self, main_window_ref, parent=None):
+	def __init__(self, parent=None):
 		super().__init__(parent)
-		self.main_window = main_window_ref
+		# self.main_window = main_window_ref # Removed
 		self.viz_display_layer = None
 		layout = QVBoxLayout()
 
@@ -288,8 +288,14 @@ class SculptingPanel(QWidget):
 		self.cancel_clone_btn.setVisible(False)
 
 	def on_select_mesh(self):
-		if self.main_window and self.main_window.sculpt_capture:
-			sculpt_capture = self.main_window.sculpt_capture
+		main_window = self.parent().parent().parent()
+		if (
+			main_window
+			and isinstance(main_window, AutoSculptorToolWindow)
+			and hasattr(main_window, "sculpt_capture")
+			and main_window.sculpt_capture
+		):
+			sculpt_capture = main_window.sculpt_capture
 			mesh_name = sculpt_capture.get_selected_mesh_name()
 			if mesh_name:
 				if sculpt_capture.mesh_name != mesh_name:
@@ -300,7 +306,7 @@ class SculptingPanel(QWidget):
 						mesh_name
 					] = sculpt_capture.get_world_space_positions(mesh_name)
 					print(f"SculptingPanel: Mesh selected - {mesh_name}")
-					# self.main_window.sculpt_capture.current_workflow = Workflow()
+					# main_window.sculpt_capture.current_workflow = Workflow()
 					# self.update(Workflow())
 					self.mesh_name_label.setText(
 						f"Selected Mesh: {mesh_name.split('|')[-1]}"
@@ -343,41 +349,47 @@ class SculptingPanel(QWidget):
 				self.mesh_name_label.setText("Selected Mesh: Error")
 
 	def on_enable_capture_changed(self, state):
-		if self.main_window:
-			if state == Qt.Checked:  # use Qt.CheckState.Checked.value for PySide6
-				if not self.main_window.sculpt_capture:
-					print("SculptingPanel: Enabling capture...")
+		main_window = self.parent().parent().parent()
+		print(
+			f"SculptingPanel: on_enable_capture_changed - main_window: {main_window}, sculpt_capture: {hasattr(main_window, 'sculpt_capture') and main_window.sculpt_capture is not None}"
+		)
+		if (
+			main_window
+			and isinstance(main_window, AutoSculptorToolWindow)
+			and hasattr(main_window, "sculpt_capture")
+			and main_window.sculpt_capture
+		):
+			print(
+				f"SculptingPanel: on_enable_capture_changed - sculpt_capture.is_capturing: {main_window.sculpt_capture.is_capturing}"
+			)
+			if state == Qt.CheckState.Checked.value:
+				print("SculptingPanel: Attempting to enable capture...")
+				if not main_window.sculpt_capture.mesh_name:
+					self.on_select_mesh()
 
-					self.main_window.sculpt_capture = SculptCapture(
-						update_history_callback=self.update,
-						update_suggestion_callback=self.main_window.suggestion_tab.update,
-					)
-
-					if not self.main_window.sculpt_capture.mesh_name:
-						self.on_select_mesh()
-					if self.main_window.sculpt_capture.mesh_name:
-						self.main_window.sculpt_capture.start_capture()
-						self.mesh_button.setEnabled(False)
-					else:
-						print("SculptingPanel: Cannot start capture, no mesh selected.")
-						self.enable_capture.setChecked(False)
-				else:
-					self.main_window.sculpt_capture.start_capture()
+				if main_window.sculpt_capture.mesh_name:
+					main_window.sculpt_capture.start_capture()
 					self.mesh_button.setEnabled(False)
-			else:
-				if self.main_window.sculpt_capture:
-					print("SculptingPanel: Disabling capture...")
-					self.main_window.sculpt_capture.stop_capture()
-					# self.update(Workflow())
-					# self.main_window.suggestion_tab.update(Workflow())
-					self.mesh_button.setEnabled(True)
+					print("SculptingPanel: Capture enabled.")
 				else:
-					print("SculptingPanel: Capture already disabled.")
+					om2.MGlobal.displayWarning(
+						"Please select a mesh before enabling capture."
+					)
+					print("SculptingPanel: Cannot start capture, no mesh selected.")
+			else:
+				print("SculptingPanel: Disabling capture...")
+				main_window.sculpt_capture.stop_capture()
+				self.mesh_button.setEnabled(True)
+				print("SculptingPanel: Capture disabled.")
+		else:
+			print("SculptingPanel: Main window or sculpt_capture not available.")
 
 		is_capture_actually_on = (
-			self.main_window
-			and self.main_window.sculpt_capture
-			and self.main_window.sculpt_capture.is_capturing
+			main_window
+			and isinstance(main_window, AutoSculptorToolWindow)
+			and hasattr(main_window, "sculpt_capture")
+			and main_window.sculpt_capture
+			and main_window.sculpt_capture.is_capturing
 		)
 
 		can_clone = is_capture_actually_on and len(self.stroke_list.selectedItems()) > 0
@@ -395,14 +407,20 @@ class SculptingPanel(QWidget):
 
 		original_index = selected_indices[0].row()
 
-		if self.main_window and self.main_window.sculpt_capture:
+		main_window = self.parent().parent().parent()
+		if (
+			main_window
+			and isinstance(main_window, AutoSculptorToolWindow)
+			and hasattr(main_window, "sculpt_capture")
+			and main_window.sculpt_capture
+		):
 			if (
 				0
 				<= original_index
-				< len(self.main_window.sculpt_capture.current_workflow.strokes)
+				< len(main_window.sculpt_capture.current_workflow.strokes)
 			):
 				self.clear_history_visualization()
-				self.main_window.sculpt_capture.delete_stroke(original_index)
+				main_window.sculpt_capture.delete_stroke(original_index)
 			else:
 				print(
 					f"Error: Cannot delete stroke, invalid original index {original_index}"
@@ -508,10 +526,13 @@ class SculptingPanel(QWidget):
 			)
 			cmds.select(clear=True)
 
+		main_window = self.parent().parent().parent()
 		if not (
-			self.main_window
-			and self.main_window.sculpt_capture
-			and self.main_window.sculpt_capture.is_capturing
+			main_window
+			and isinstance(main_window, AutoSculptorToolWindow)
+			and hasattr(main_window, "sculpt_capture")
+			and main_window.sculpt_capture
+			and main_window.sculpt_capture.is_capturing
 		):
 			om2.MGlobal.displayWarning("Please enable history capture first.")
 			return
@@ -545,17 +566,20 @@ class SculptingPanel(QWidget):
 			om2.MGlobal.displayWarning("No clone preview available to accept.")
 			return
 
+		main_window = self.parent().parent().parent()
 		if not (
-			self.main_window
-			and self.main_window.sculpt_capture
-			and self.main_window.sculpt_capture.is_capturing
+			main_window
+			and isinstance(main_window, AutoSculptorToolWindow)
+			and hasattr(main_window, "sculpt_capture")
+			and main_window.sculpt_capture
+			and main_window.sculpt_capture.is_capturing
 		):
 			om2.MGlobal.displayWarning("Cannot accept clone: Capture is not active.")
 			return
 
 		print("SculptingPanel: Accepting cloned stroke...")
 
-		sc = self.main_window.sculpt_capture
+		sc = main_window.sculpt_capture
 		try:
 			sc.apply_cloned_stroke(self.pending_cloned_stroke)
 
@@ -608,16 +632,38 @@ class SculptingPanel(QWidget):
 		self.clone_stroke_btn.setText("Preview Clone")
 		self.clone_stroke_btn.setEnabled(True)
 
-		if not (self.main_window and self.main_window.sculpt_capture):
+		main_window = self.parent().parent().parent()
+		if not (
+			main_window
+			and isinstance(main_window, AutoSculptorToolWindow)
+			and hasattr(main_window, "sculpt_capture")
+			and main_window.sculpt_capture
+		):
 			print("SculptingPanel: Capture system not available.")
 			return
 		if self.source_stroke_for_clone_index is None:
 			print("SculptingPanel: Error - Source stroke index lost.")
 			return
 
-		sc = self.main_window.sculpt_capture
+		sc = main_window.sculpt_capture
 		if not sc.mesh_name:
-			om2.MGlobal.displayError("Sculpting mesh not set in capture system.")
+			om2.MGlobal.displayError(
+				"SculptingPanel: Sculpting mesh not set in capture system."
+			)
+			return
+
+		mesh_data = MeshInterface.get_mesh_data(sc.mesh_name)
+		if not mesh_data:
+			om2.MGlobal.displayError(
+				"SculptingPanel: Failed to get mesh data for cloning."
+			)
+			return
+		sc._ensure_synthesizer_mesh(mesh_data)
+
+		if not sc.synthesizer:
+			om2.MGlobal.displayError(
+				"SculptingPanel: Synthesizer failed to initialize."
+			)
 			return
 
 		if not target_vertex_str.startswith(sc.mesh_name.split("|")[-1] + "."):
@@ -743,23 +789,29 @@ class SculptingPanel(QWidget):
 			om2.MGlobal.displayWarning("No clone preview available to accept.")
 			return
 
+		main_window = self.parent().parent().parent()
 		if not (
-			self.main_window
-			and self.main_window.sculpt_capture
-			and self.main_window.sculpt_capture.is_capturing
+			main_window
+			and isinstance(main_window, AutoSculptorToolWindow)
+			and hasattr(main_window, "sculpt_capture")
+			and main_window.sculpt_capture
+			and main_window.sculpt_capture.is_capturing
 		):
 			om2.MGlobal.displayWarning("Cannot accept clone: Capture is not active.")
 			return
 
 		print("SculptingPanel: Accepting cloned stroke...")
 
-		sc = self.main_window.sculpt_capture
+		sc = main_window.sculpt_capture
 		try:
 			sc.apply_cloned_stroke(self.pending_cloned_stroke)
 
 			self.clear_clone_preview_visualization()
 			self.pending_cloned_stroke = None
-			self.accept_clone_btn.setEnabled(False)
+			if hasattr(self, "accept_clone_btn") and isinstance(
+				self.accept_clone_btn, QPushButton
+			):
+				self.accept_clone_btn.setEnabled(False)
 			self.source_stroke_for_clone_index = None
 
 		except Exception as e:
@@ -767,16 +819,25 @@ class SculptingPanel(QWidget):
 			om2.MGlobal.displayError("Failed to apply cloned stroke.")
 			self.clear_clone_preview_visualization()
 			self.pending_cloned_stroke = None
-			self.accept_clone_btn.setEnabled(False)
+			if hasattr(self, "accept_clone_btn") and isinstance(
+				self.accept_clone_btn, QPushButton
+			):
+				self.accept_clone_btn.setEnabled(False)
 			self.source_stroke_for_clone_index = None
 
 	def on_clear_all_clicked(self):
 		"""Clears the entire stroke history."""
 		print("SculptingPanel: Clearing all history...")
-		if self.main_window and self.main_window.sculpt_capture:
-			self.main_window.sculpt_capture.clear_history()
-			self.main_window.sculpt_capture.current_workflow = Workflow()
-			self.update(self.main_window.sculpt_capture.current_workflow)
+		main_window = self.parent().parent().parent()
+		if (
+			main_window
+			and isinstance(main_window, AutoSculptorToolWindow)
+			and hasattr(main_window, "sculpt_capture")
+			and main_window.sculpt_capture
+		):
+			main_window.sculpt_capture.clear_history()
+			main_window.sculpt_capture.current_workflow = Workflow()
+			self.update(main_window.sculpt_capture.current_workflow)
 			self.sample_list.setRowCount(0)
 			self.clear_history_visualization()
 			self.clear_clone_preview_visualization()
@@ -784,6 +845,7 @@ class SculptingPanel(QWidget):
 			self.clone_stroke_btn.setEnabled(False)
 			om2.MGlobal.displayInfo("Stroke history cleared.")  # type: ignore
 		else:
+			# Fallback for when capture is inactive or main_window is not AutoSculptorToolWindow
 			self.update(Workflow())
 			self.sample_list.setRowCount(0)
 			self.clear_history_visualization()
@@ -827,10 +889,10 @@ class SculptingPanel(QWidget):
 
 
 class SuggestionPanel(QWidget):
-	def __init__(self, main_window_ref, parent=None):
+	def __init__(self, parent=None):
 		super().__init__(parent)
 		layout = QVBoxLayout()
-		self.main_window = main_window_ref
+		# self.main_window = main_window_ref # Removed
 
 		# Prediction Frame
 		prediction_group = QGroupBox("Prediction")
@@ -980,15 +1042,21 @@ class SuggestionPanel(QWidget):
 			self.update_sample_list(self.workflow.strokes[selected_indexes[0].row()])
 
 	def on_enable_prediction_changed(self, state):
-		is_enabled = state == Qt.Checked
+		is_enabled = state == Qt.CheckState.Checked.value
 		# print(f"SuggestionPanel: Enable Prediction changed to: {is_enabled}")
 		self.reject_sel_btn.setEnabled(is_enabled)
 		self.accept_sel_btn.setEnabled(is_enabled)
 		self.accept_all_btn.setEnabled(is_enabled)
 		self.enable_auto_camera.setEnabled(is_enabled)
 
-		if self.main_window and self.main_window.sculpt_capture:
-			self.main_window.sculpt_capture.set_suggestions_enabled(is_enabled)
+		main_window = self.parent().parent().parent()
+		if (
+			main_window
+			and isinstance(main_window, AutoSculptorToolWindow)
+			and hasattr(main_window, "sculpt_capture")
+			and main_window.sculpt_capture
+		):
+			main_window.sculpt_capture.set_suggestions_enabled(is_enabled)
 		elif is_enabled:
 			print(
 				"SuggestionPanel: Capture instance doesn't exist yet. Suggestions will generate once capture starts."
@@ -997,40 +1065,52 @@ class SuggestionPanel(QWidget):
 		self.on_stroke_selection_changed()
 
 	def on_enable_auto_camera_changed(self, state):
-		is_enabled = state == Qt.Checked
+		is_enabled = state == Qt.CheckState.Checked.value
 		print(f"SuggestionPanel: Enable Auto Camera changed to: {is_enabled}")
-		if self.main_window and self.main_window.sculpt_capture:
-			self.main_window.sculpt_capture.auto_camera_enabled = is_enabled
-			if is_enabled and self.main_window.sculpt_capture.current_suggestions:
-				self.main_window.sculpt_capture._update_auto_camera()
+		main_window = self.parent().parent().parent()
+		if (
+			main_window
+			and isinstance(main_window, AutoSculptorToolWindow)
+			and hasattr(main_window, "sculpt_capture")
+			and main_window.sculpt_capture
+		):
+			main_window.sculpt_capture.auto_camera_enabled = is_enabled
+			if is_enabled and main_window.sculpt_capture.current_suggestions:
+				main_window.sculpt_capture._update_auto_camera()
 			if not is_enabled:
-				self.main_window.sculpt_capture.restore_previous_camera()
+				main_window.sculpt_capture.restore_previous_camera()
 		else:
 			print("SuggestionPanel: Capture instance not available for camera control.")
 
 	def on_accept_sel_clicked(self):
 		selection_index = self.stroke_list.selectedIndexes()[0].row()
+		main_window = self.parent().parent().parent()
 		if (
 			selection_index != -1
-			and self.main_window
-			and self.main_window.sculpt_capture
+			and main_window
+			and isinstance(main_window, AutoSculptorToolWindow)
+			and hasattr(main_window, "sculpt_capture")
+			and main_window.sculpt_capture
 		):
 			print(f"SuggestionPanel: Accepting suggestion index {selection_index}")
-			self.main_window.sculpt_capture.accept_selected_suggestion(selection_index)
+			main_window.sculpt_capture.accept_selected_suggestion(selection_index)
 		else:
 			print("SuggestionPanel: No suggestion selected or capture inactive.")
 
 	def on_accept_all_clicked(self):
+		main_window = self.parent().parent().parent()
 		if (
 			self.workflow
 			and len(self.workflow.strokes) > 0
-			and self.main_window
-			and self.main_window.sculpt_capture
+			and main_window
+			and isinstance(main_window, AutoSculptorToolWindow)
+			and hasattr(main_window, "sculpt_capture")
+			and main_window.sculpt_capture
 		):
 			print(
 				f"SuggestionPanel: Accepting all {len(self.workflow.strokes)} suggestions."
 			)
-			self.main_window.sculpt_capture.accept_all_suggestions()
+			main_window.sculpt_capture.accept_all_suggestions()
 		else:
 			print("SuggestionPanel: No suggestions to accept or capture inactive.")
 
@@ -1042,12 +1122,15 @@ class SuggestionPanel(QWidget):
 
 		selection_index = selected_indexes[0].row()
 
+		main_window = self.parent().parent().parent()
 		if (
-			self.main_window
-			and self.main_window.sculpt_capture
-			and self.main_window.sculpt_capture.suggestions_enabled
+			main_window
+			and isinstance(main_window, AutoSculptorToolWindow)
+			and hasattr(main_window, "sculpt_capture")
+			and main_window.sculpt_capture
+			and main_window.sculpt_capture.suggestions_enabled
 		):
-			self.main_window.sculpt_capture.reject_suggestion(selection_index)
+			main_window.sculpt_capture.reject_suggestion(selection_index)
 			if self.workflow and 0 <= selection_index < len(self.workflow.strokes):
 				del self.workflow.strokes[selection_index]
 				self.update(self.workflow)
@@ -1080,11 +1163,11 @@ class SuggestionPanel(QWidget):
 
 
 class AutoSculptorToolWindow(MayaQWidgetDockableMixin, QDialog):
-	def __init__(self, parent=get_maya_main_window()):
+	def __init__(self, parent=None):
 		if cmds.workspaceControl("AutoSculptor", exists=True):
 			cmds.deleteUI("AutoSculptor", control=True)
-		super().__init__(parent)
-		self.sculpt_capture = None
+		super().__init__()
+		# self.sculpt_capture = None # Moved creation to after tabs are initialized
 
 		self.setWindowTitle("AutoSculptor")
 		self.setGeometry(100, 100, 600, 700)
@@ -1101,6 +1184,12 @@ class AutoSculptorToolWindow(MayaQWidgetDockableMixin, QDialog):
 		layout.addWidget(self.tabs)
 		self.setLayout(layout)
 
+		# Create sculpt_capture here after tabs are initialized
+		self.sculpt_capture = SculptCapture(
+			update_history_callback=self.sculpting_tab.update,
+			update_suggestion_callback=self.suggestion_tab.update,
+		)
+
 	def closeEvent(self, event):
 		"""Override close event for cleanup."""
 		if hasattr(self, "sculpting_tab") and self.sculpting_tab:
@@ -1108,7 +1197,7 @@ class AutoSculptorToolWindow(MayaQWidgetDockableMixin, QDialog):
 		if hasattr(self, "suggestion_tab") and self.suggestion_tab:
 			self.suggestion_tab.cleanup()
 
-		if self.sculpt_capture:
+		if hasattr(self, "sculpt_capture") and self.sculpt_capture:
 			self.sculpt_capture.cleanup()
 			self.sculpt_capture = None
 

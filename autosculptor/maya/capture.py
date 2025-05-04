@@ -884,11 +884,13 @@ class SculptCapture:
 			on_click=self.on_mouse_click, on_move=self.on_mouse_move
 		)
 		self.listener.start()
+		self.is_capturing = True
 
 	def stop_capture(self):
 		if self.listener is not None:
 			self.listener.stop()
 			self.listener = None
+			self.is_capturing = False
 
 	def register_script_job(self):
 
