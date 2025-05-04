@@ -1,10 +1,10 @@
 import time
 import copy
 import math
-import numpy as np
+import numpy as np  # type: ignore
 from typing import List, Dict, Tuple, Optional
-from scipy.optimize import linear_sum_assignment
-from scipy.spatial.transform import Rotation as R
+from scipy.optimize import linear_sum_assignment  # type: ignore
+from scipy.spatial.transform import Rotation as R  # type: ignore
 from autosculptor.core.data_structures import Stroke, Sample, Workflow
 from autosculptor.core.mesh_interface import MeshData, MeshInterface
 from autosculptor.analysis.parameterization import StrokeParameterizer
@@ -126,15 +126,28 @@ class StrokeSynthesizer:
 		if not current_workflow.strokes or len(current_workflow.strokes) < 2:
 			return suggestions
 
+		active_context_indices = current_workflow.get_active_context_indices()
+		active_strokes = current_workflow.get_active_context_strokes()
+		full_stroke_count = len(current_workflow.strokes)
+
+		if not active_strokes or full_stroke_count < 1:
+			print("Initialize Suggestions: Not enough strokes in context or workflow.")
+			return suggestions
+
 		last_stroke_b_prime = current_workflow.strokes[-1]
 		camera_lookat = get_active_camera_lookat_vector()
 		self._ensure_parameterized(last_stroke_b_prime, camera_lookat)
 		geo_calc = self.parameterizer.geo_calc
 
 		candidate_indices = []
-		for i in range(len(current_workflow.strokes) - 1):
-			past_stroke_bi = current_workflow.strokes[i]
-			next_stroke_bi_plus_1 = current_workflow.strokes[i + 1]
+		for i, past_stroke_bi in enumerate(active_strokes):
+			original_index_i = (
+				active_context_indices[i] if active_context_indices else i
+			)
+			next_stroke_index = original_index_i + 1
+			if next_stroke_index >= full_stroke_count:
+				continue
+			next_stroke_bi_plus_1 = current_workflow.strokes[next_stroke_index]
 
 			self._ensure_parameterized(past_stroke_bi, camera_lookat)
 			self._ensure_parameterized(next_stroke_bi_plus_1, camera_lookat)
@@ -146,7 +159,6 @@ class StrokeSynthesizer:
 			if not past_stroke_bi.samples or not next_stroke_bi_plus_1.samples:
 				continue
 
-			# TODO: Pass a truncated workflow ending before past_stroke
 			neighbor_dist_sq = calculate_neighborhood_distance(
 				bo=last_stroke_b_prime,
 				bi=past_stroke_bi,
@@ -162,25 +174,30 @@ class StrokeSynthesizer:
 			if neighbor_dist_sq != float("inf"):
 				next_stroke_index = i + 1
 				if next_stroke_index < len(current_workflow.strokes):
-					candidate_indices.append({"index": i, "dist_sq": neighbor_dist_sq})
+					candidate_indices.append(
+						{
+							"original_index": original_index_i,
+							"dist_sq": neighbor_dist_sq,
+						}
+					)
 
 		candidate_indices.sort(key=lambda x: x["dist_sq"])
 		num_candidates_to_use = min(3, len(candidate_indices))
-		print(
-			f"Found {len(candidate_indices)} potential matches. Using top {num_candidates_to_use}."
-		)
+		# print(
+		# 	f"Found {len(candidate_indices)} potential matches. Using top {num_candidates_to_use}."
+		# )
 
 		for candidate in candidate_indices[:num_candidates_to_use]:
-			i = candidate["index"]
-			past_stroke_bi = current_workflow.strokes[i]
-			next_stroke_bi_plus_1 = current_workflow.strokes[i + 1]
+			original_index_i = candidate["original_index"]
+			past_stroke_bi = current_workflow.strokes[original_index_i]
+			next_stroke_bi_plus_1 = current_workflow.strokes[original_index_i + 1]
 
-			print(
-				f"\nGenerating candidate from past stroke {i} (Dist^2: {candidate['dist_sq']:.4f})"
-			)
+			# print(
+			# f"\nGenerating candidate from past stroke {original_index_i} (Dist^2: {candidate['dist_sq']:.4f})"
+			# )
 
 			if not next_stroke_bi_plus_1.samples:
-				print(f"  Skipping: Next stroke {i+1} has no samples.")
+				print(f"  Skipping: Next stroke {original_index_i+1} has no samples.")
 				continue
 
 			match_map_prime_i = self._match_samples(last_stroke_b_prime, past_stroke_bi)
@@ -224,7 +241,7 @@ class StrokeSynthesizer:
 
 				if s_i_plus_1 is None:
 					print(
-						f"  Warning: Could not find corresponding s_{i+1} for s_{i} (idx {idx_i}). Skipping sample."
+						f"  Warning: Could not find corresponding s_{original_index_i+1} for s_{original_index_i} (idx {idx_i}). Skipping sample."
 					)
 					continue
 
@@ -283,7 +300,11 @@ class StrokeSynthesizer:
 						timestamp=target_timestamp,
 						curvature=target_curvature,
 					)
-					new_sample.camera_lookat = s_prime.camera_lookat
+					new_sample.camera_lookat = (
+						s_prime.camera_lookat
+						if hasattr(s_prime, "camera_lookat")
+						else camera_lookat
+					)
 
 					initial_suggestion.add_sample(new_sample)
 					num_generated_samples += 1
@@ -295,15 +316,15 @@ class StrokeSynthesizer:
 			if num_generated_samples > 0:
 				self._ensure_parameterized(initial_suggestion, camera_lookat)
 				suggestions.append(initial_suggestion)
-				print(
-					f"  Generated candidate stroke with {num_generated_samples} samples."
-				)
+				# print(
+				# 	f"  Generated candidate stroke with {num_generated_samples} samples."
+				# )
 			else:
 				print(f"  Failed to generate any valid samples for this candidate.")
 
-		print(f"Generated {len(suggestions)} suggestions")
-		for i, s in enumerate(suggestions):
-			print(f"Suggestion {i}: {len(s.samples)} samples")
+		# print(f"Generated {len(suggestions)} suggestions")
+		# for i, s in enumerate(suggestions):
+		# print(f"Suggestion {i}: {len(s.samples)} samples")
 
 		return suggestions
 
@@ -385,9 +406,12 @@ class StrokeSynthesizer:
 
 		min_energy = float("inf")
 
-		for i in range(len(current_workflow.strokes) - 1):
-			past_stroke = current_workflow.strokes[i]
+		context_strokes = current_workflow.get_active_context_strokes()
+		if not context_strokes:
+			print("Warning: No strokes in active context for energy calculation.")
+			return float("inf")
 
+		for past_stroke in context_strokes:
 			neighborhood_distance_sq = calculate_neighborhood_distance(
 				candidate_stroke,
 				past_stroke,
@@ -410,7 +434,7 @@ class StrokeSynthesizer:
 
 			min_energy = min(min_energy, energy)
 
-		print(f"Calculated Energy for Candidate: {energy}")
+		# print(f"Calculated Energy for Candidate: {energy}")
 		return min_energy
 
 	def _apply_optimization(
@@ -558,7 +582,7 @@ class StrokeSynthesizer:
 		Synthesizes the next stroke using initialization and iterative optimization.
 		"""
 		synthesis_start_time = time.time()
-		print("\n--- Starting Stroke Synthesis ---")
+		# print("\n--- Starting Stroke Synthesis ---")
 
 		self._update_parameterizer_mesh(mesh_data)
 		if not self.parameterizer:
@@ -569,6 +593,20 @@ class StrokeSynthesizer:
 		if not current_workflow.strokes or len(current_workflow.strokes) < 2:
 			print("Workflow history too short (<2 strokes). Cannot synthesize.")
 			return None
+
+		active_context_indices = current_workflow.get_active_context_indices()
+		active_strokes = current_workflow.get_active_context_strokes()
+		if not active_strokes:
+			print("Workflow has no active context strokes. Cannot synthesize.")
+			return None
+
+		if len(current_workflow.strokes) == 0:
+			print("Error: Workflow somehow became empty.")
+			return None
+
+		print(
+			f"Synthesizing based on context: {active_context_indices if active_context_indices else 'Full History'}"
+		)
 
 		initial_candidates = self.initialize_suggestions(current_workflow)
 		if not initial_candidates:
@@ -581,25 +619,15 @@ class StrokeSynthesizer:
 		camera_lookat = get_active_camera_lookat_vector()
 		self._ensure_parameterized(last_stroke, camera_lookat)
 
-		print("Evaluating initial candidates...")
+		# print("Evaluating initial candidates...")
 		for candidate in initial_candidates:
 			self._ensure_parameterized(candidate, camera_lookat)
 			current_min_dist_sq = float("inf")
-			for i in range(len(current_workflow.strokes) - 1):
-				hist_stroke_bi = current_workflow.strokes[i]
+			for hist_stroke_bi in active_strokes:
 				if hist_stroke_bi.stroke_type != candidate.stroke_type:
 					continue
 
 				self._ensure_parameterized(hist_stroke_bi, camera_lookat)
-				if i > 0:
-					self._ensure_parameterized(
-						current_workflow.strokes[i - 1], camera_lookat
-					)
-				if i + 1 < len(current_workflow.strokes):
-					self._ensure_parameterized(
-						current_workflow.strokes[i + 1], camera_lookat
-					)
-
 				dist_sq = calculate_neighborhood_distance(
 					candidate,
 					hist_stroke_bi,
@@ -615,9 +643,9 @@ class StrokeSynthesizer:
 				if dist_sq < current_min_dist_sq:
 					current_min_dist_sq = dist_sq
 
-			print(
-				f"  Initial Candidate {initial_candidates.index(candidate)} min energy (dist^2): {current_min_dist_sq:.4f}"
-			)
+			# print(
+			# 	f"  Initial Candidate {initial_candidates.index(candidate)} min energy (dist^2): {current_min_dist_sq:.4f}"
+			# )
 			if current_min_dist_sq < min_initial_energy:
 				min_initial_energy = current_min_dist_sq
 				best_initial_candidate = copy.deepcopy(candidate)
@@ -634,17 +662,35 @@ class StrokeSynthesizer:
 		last_stroke_b_prime = current_workflow.strokes[-1]
 		for iteration in range(num_iterations):
 			iter_start_time = time.time()
-			print(f"\n--- Optimization Iteration {iteration+1}/{num_iterations} ---")
-			print(f"last_iteration_energy: {last_iteration_energy}")
+			# print(f"\n--- Optimization Iteration {iteration+1}/{num_iterations} ---")
+			# print(f"last_iteration_energy: {last_iteration_energy}")
 
 			self._ensure_parameterized(optimized_stroke, camera_lookat)
 
 			min_dist_sq = float("inf")
 			best_match_stroke_bi = None
-			best_match_index_i = -1
-			for i in range(len(current_workflow.strokes) - 1):
-				hist_stroke_bi = current_workflow.strokes[i]
-				hist_stroke_bi_plus_1 = current_workflow.strokes[i + 1]
+			best_match_original_index_i = -1
+			active_context_indices_current = (
+				current_workflow.get_active_context_indices()
+			)
+			active_strokes_current = current_workflow.get_active_context_strokes()
+			if not active_strokes_current:
+				print(
+					"  Warning: Active context became empty during optimization. Stopping."
+				)
+				break
+
+			for i, hist_stroke_bi in enumerate(active_strokes_current):
+				original_index_i = (
+					active_context_indices_current[i]
+					if active_context_indices_current
+					else i
+				)
+				next_stroke_index = original_index_i + 1
+				if next_stroke_index >= len(current_workflow.strokes):
+					continue
+				hist_stroke_bi_plus_1 = current_workflow.strokes[next_stroke_index]
+
 				if hist_stroke_bi.stroke_type != optimized_stroke.stroke_type:
 					continue
 				if (
@@ -654,10 +700,6 @@ class StrokeSynthesizer:
 					continue
 
 				self._ensure_parameterized(hist_stroke_bi, camera_lookat)
-
-				# self._ensure_parameterized(optimized_stroke, camera_lookat)
-				# self._ensure_parameterized(last_stroke_b_prime, camera_lookat)
-				# self._ensure_parameterized(hist_stroke_bi_plus_1, camera_lookat)
 
 				if i > 0:
 					self._ensure_parameterized(
@@ -684,7 +726,7 @@ class StrokeSynthesizer:
 				if neighbor_dist_sq < min_dist_sq:
 					min_dist_sq = neighbor_dist_sq
 					best_match_stroke_bi = hist_stroke_bi
-					best_match_index_i = i
+					best_match_index_i = original_index_i
 
 			if best_match_stroke_bi is None:
 				print("  Warning: No best match 'bi'. Stopping.")
@@ -695,9 +737,9 @@ class StrokeSynthesizer:
 			# )
 			# continue
 
-			print(
-				f"  Found best matching historical stroke 'bi' (index {best_match_index_i}) with neighborhood dist^2: {min_dist_sq:.4f}"
-			)
+			# print(
+			# f"  Found best matching historical stroke 'bi' (index {best_match_index_i}) with neighborhood dist^2: {min_dist_sq:.4f}"
+			# )
 
 			hist_stroke_bi_plus_1 = current_workflow.strokes[best_match_index_i + 1]
 			self._ensure_parameterized(hist_stroke_bi_plus_1, camera_lookat)
@@ -714,9 +756,9 @@ class StrokeSynthesizer:
 				wc=0.8,
 			)
 
-			print(
-				f"  Current Optimization Energy (DiffDist^2): {current_optimization_energy:.4f} (Previous: {last_iteration_energy:.4f})"
-			)
+			# print(
+			# 	f"  Current Optimization Energy (DiffDist^2): {current_optimization_energy:.4f} (Previous: {last_iteration_energy:.4f})"
+			# )
 
 			improvement_tolerance = 1e-4
 			energy_increase_factor = 1.05
@@ -883,9 +925,9 @@ class StrokeSynthesizer:
 					"  Warning: Could not calculate any target parameters based on history match. Skipping update."
 				)
 				continue
-			print(
-				f"  Calculated {num_targets_calculated} target sample parameters for optimization step."
-			)
+			# print(
+			# 	f"  Calculated {num_targets_calculated} target sample parameters for optimization step."
+			# )
 
 			param_changed_count = 0
 			for idx_bo, s_bo in enumerate(optimized_stroke.samples):
@@ -969,12 +1011,12 @@ class StrokeSynthesizer:
 					) * s_bo.curvature + optimization_alpha * target_curve
 
 					param_changed_count += 1
-			print(f"  Parameters interpolated for {param_changed_count} samples.")
+			# print(f"  Parameters interpolated for {param_changed_count} samples.")
 			if param_changed_count > 0:
 				try:
-					print(
-						"  Re-parameterizing optimized stroke after world interpolation..."
-					)
+					# print(
+					# 	"  Re-parameterizing optimized stroke after world interpolation..."
+					# )
 					self._ensure_parameterized(optimized_stroke, camera_lookat)
 				except Exception as e:
 					print(
@@ -982,14 +1024,14 @@ class StrokeSynthesizer:
 					)
 			# if param_changed_count == 0: print("  Note: Parameters did not change significantly this iteration.")
 
-			print(
-				f"  Iteration {iteration + 1} took {time.time() - iter_start_time:.3f}s"
-			)
+			# print(
+			# 	f"  Iteration {iteration + 1} took {time.time() - iter_start_time:.3f}s"
+			# )
 
 		if smoothing_iterations > 0:
-			print(
-				f"\nApplying final parameter smoothing ({smoothing_iterations} iterations)..."
-			)
+			# print(
+			# 	f"\nApplying final parameter smoothing ({smoothing_iterations} iterations)..."
+			# )
 			optimized_stroke = self._apply_parameter_smoothing(
 				optimized_stroke, iterations=smoothing_iterations
 			)
@@ -999,9 +1041,11 @@ class StrokeSynthesizer:
 		final_best_match_bi = None
 		final_best_match_idx = -1
 		min_final_dist_sq = float("inf")
-		if "best_match_stroke_bi" in locals() and best_match_stroke_bi:
-			for i in range(len(current_workflow.strokes) - 1):
-				hist_stroke_bi = current_workflow.strokes[i]
+		active_context_indices_final = current_workflow.get_active_context_indices()
+		active_strokes_final = current_workflow.get_active_context_strokes()
+
+		if active_strokes_final:
+			for i, hist_stroke_bi in enumerate(active_strokes_final):
 				if hist_stroke_bi.stroke_type != optimized_stroke.stroke_type:
 					continue
 				self._ensure_parameterized(hist_stroke_bi, camera_lookat)
@@ -1029,11 +1073,15 @@ class StrokeSynthesizer:
 				if dist_sq < min_final_dist_sq:
 					min_final_dist_sq = dist_sq
 					final_best_match_bi = hist_stroke_bi
-					final_best_match_idx = i
+					final_best_match_idx = (
+						active_context_indices_final[i]
+						if active_context_indices_final
+						else i
+					)
 
 			if final_best_match_bi:
 				final_energy = min_final_dist_sq
-				print(f"Final best match is stroke {final_best_match_idx}")
+				# print(f"Final best match is stroke {final_best_match_idx}")
 			else:
 				print(
 					"Warning: Could not find a final best match stroke 'bi'. Using last iteration's energy."
@@ -1045,10 +1093,10 @@ class StrokeSynthesizer:
 			)
 			final_energy = min_initial_energy
 
-		print(
-			f"\nOptimization finished. Final energy (dist^2): {final_energy:.4f} (Threshold: {energy_threshold})"
-		)
-		print(f"Total synthesis time: {time.time() - synthesis_start_time:.2f}s")
+		# print(
+		# 	f"\nOptimization finished. Final energy (dist^2): {final_energy:.4f} (Threshold: {energy_threshold})"
+		# )
+		# print(f"Total synthesis time: {time.time() - synthesis_start_time:.2f}s")
 
 		if final_energy > energy_threshold:
 			print("Final energy exceeds threshold. No suggestion returned.")

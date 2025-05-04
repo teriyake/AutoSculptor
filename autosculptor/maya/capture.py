@@ -1,14 +1,14 @@
-import maya.cmds as cmds
-import maya.OpenMayaUI as omui
-import maya.OpenMaya as om
-import maya.api.OpenMaya as om2
+import maya.cmds as cmds  # type: ignore
+import maya.OpenMayaUI as omui  # type: ignore
+import maya.OpenMaya as om  # type: ignore
+import maya.api.OpenMaya as om2  # type: ignore
 import maya.utils
-import numpy as np
+import numpy as np  # type: ignore
 import time
 
-from pynput import mouse
+from pynput import mouse  # type: ignore
 
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from autosculptor.core.data_structures import Sample, Stroke, Workflow
 from autosculptor.core.mesh_interface import MeshData, MeshInterface
@@ -155,7 +155,6 @@ def get_autosculpt_brush_mode(ctx, maya_tool_name):
 
 
 class SculptCapture:
-
 	INTERPOLATED_SAMPLES_PER_EVENT = 5
 	STROKE_END_TIMEOUT = 0.25
 	DEFAULT_CAMERA_DISTANCE_FACTOR = 5.0
@@ -292,6 +291,7 @@ class SculptCapture:
 				self.active_stroke_in_progress.add_sample(sample)
 
 	def get_world_space_positions(self, mesh_name):
+
 		try:
 			selection_list = om2.MSelectionList()
 			selection_list.add(mesh_name)
@@ -303,6 +303,7 @@ class SculptCapture:
 			return None
 
 	def get_world_space_normals(self, mesh_name):
+
 		try:
 			selection_list = om2.MSelectionList()
 			selection_list.add(mesh_name)
@@ -314,6 +315,7 @@ class SculptCapture:
 			return None
 
 	def get_active_sculpt_tool(self):
+
 		context = cmds.currentCtx()
 
 		if "sculptMesh" in context:
@@ -321,6 +323,7 @@ class SculptCapture:
 		return None
 
 	def get_brush_size_and_pressure(self, tool_name):
+
 		if not tool_name:
 			return None
 
@@ -339,6 +342,7 @@ class SculptCapture:
 			return 1.0, 1.0
 
 	def _ensure_synthesizer_mesh(self, mesh_data: MeshData):
+
 		if not self.synthesizer:
 			try:
 				self.synthesizer = StrokeSynthesizer(mesh_data)
@@ -368,6 +372,7 @@ class SculptCapture:
 				print(f"SculptCapture: Error initializing missing parameterizer: {e}")
 
 	def process_mesh_changes(self):
+
 		if not self.mesh_name:
 			return
 
@@ -522,7 +527,7 @@ class SculptCapture:
 					current_stroke.add_sample(sample)
 					print(f"SculptCapture: Added centroid at {sample_position}")
 			else:
-				from sklearn.decomposition import PCA
+				from sklearn.decomposition import PCA  # type: ignore
 
 				if len(moved_points) >= 2:
 					pca = PCA(n_components=1)
@@ -704,6 +709,7 @@ class SculptCapture:
 					print(f"SculptCapture: Error visualizing suggestion: {viz_e}")
 
 	def get_selected_mesh_name(self):
+
 		selected_objects = cmds.ls(selection=True, long=True)
 		if not selected_objects:
 			om2.MGlobal.displayError("No object selected")
@@ -725,6 +731,7 @@ class SculptCapture:
 			return None
 
 	def generate_suggestions(self):
+
 		if not self.mesh_name or not cmds.objExists(self.mesh_name):
 			print("SculptCapture: Mesh no longer exists, clearing reference")
 			self.mesh_name = None
@@ -802,6 +809,7 @@ class SculptCapture:
 			self.previous_camera_state = None
 
 	def _update_auto_camera(self):
+
 		if not self.auto_camera_enabled:
 			return
 		if not self.current_suggestions:
@@ -858,6 +866,7 @@ class SculptCapture:
 			traceback.print_exc()
 
 	def restore_previous_camera(self):
+
 		if self.previous_camera_state is None:
 			print("No previous camera state stored to restore.")
 			return
@@ -930,7 +939,6 @@ class SculptCapture:
 			self.clone_preview_visualizer.clear()
 
 	def clear_suggestions(self):
-
 		if self.current_suggestions:
 			print("SculptCapture: Clearing suggestions.")
 		self.current_suggestions = []
@@ -942,10 +950,48 @@ class SculptCapture:
 			viz.clear()
 		self.suggestion_visualizers.clear()
 
+	def set_active_context(self, indices: List[int]):
+		"""Sets the active context in the workflow and regenerates suggestions."""
+		if not self.current_workflow:
+			return
+		self.current_workflow.set_active_context(indices)
+
+		if self.suggestions_enabled:
+			print("SculptCapture: Context changed, regenerating suggestions...")
+			self.generate_suggestions()
+		else:
+			self.clear_suggestions()
+
+	def clear_active_context(self):
+		"""Clears the active context and regenerates suggestions."""
+		if not self.current_workflow:
+			return
+		self.current_workflow.clear_active_context()
+
+		if self.suggestions_enabled:
+			print("SculptCapture: Context cleared, regenerating suggestions...")
+			self.generate_suggestions()
+		else:
+			self.clear_suggestions()
+
 	def delete_stroke(self, stroke_index):
 		if 0 <= stroke_index < len(self.current_workflow):
 			del self.current_workflow.strokes[stroke_index]
 			print(f"SculptCapture: Deleted stroke at index {stroke_index}")
+
+			if self.current_workflow.active_context_indices:
+				new_context = []
+				for idx in self.current_workflow.active_context_indices:
+					if idx < stroke_index:
+						new_context.append(idx)
+					elif idx > stroke_index:
+						new_context.append(idx - 1)
+				self.current_workflow.active_context_indices = (
+					new_context if new_context else None
+				)
+				print(
+					f"  Updated context indices: {self.current_workflow.active_context_indices}"
+				)
 
 			if self.update_history_callback:
 				self.update_history_callback(self.copy_workflow())
@@ -959,7 +1005,6 @@ class SculptCapture:
 			print(f"WARNING: Invalid stroke index for deletion: {stroke_index}")
 
 	def visualize_suggestions(self):
-
 		self.clear_suggestion_visualizers()
 		if not self.mesh_name or not cmds.objExists(self.mesh_name):
 			print("Cannot visualize suggestions, mesh not valid.")
@@ -992,7 +1037,6 @@ class SculptCapture:
 			self.visualize_suggestions()
 
 	def accept_selected_suggestion(self, suggestion_index: int):
-
 		if not self.is_capturing:
 			om2.MGlobal.displayWarning(
 				"Cannot accept suggestion: Capture is not active."

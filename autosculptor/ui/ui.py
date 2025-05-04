@@ -17,12 +17,13 @@ from PySide6.QtWidgets import (  # type: ignore
 	QAbstractItemView,
 )
 from PySide6.QtCore import Qt  # type: ignore
+from PySide6.QtGui import QColor  # type: ignore
 import maya.OpenMayaUI as omui  # type: ignore
 import maya.api.OpenMaya as om2  # type: ignore
 from shiboken6 import wrapInstance  # type: ignore
 import maya.cmds as cmds  # type: ignore
 from maya.app.general.mayaMixin import MayaQWidgetDockableMixin  # type: ignore
-import numpy as np
+import numpy as np  # type: ignore
 
 from autosculptor.core.data_structures import Sample, Stroke, Workflow
 from autosculptor.core.brush import Brush, BrushMode
@@ -33,7 +34,7 @@ from autosculptor.suggestions.visualization import StrokeVisualizer
 from autosculptor.core.mesh_interface import MeshInterface
 from autosculptor.maya.utils import get_active_camera_lookat_vector
 
-from typing import Optional
+from typing import Optional, List
 
 
 def get_maya_main_window():
@@ -103,6 +104,8 @@ class SculptingPanel(QWidget):
 	CLONE_VIZ_COLOR = (0.0, 1.0, 0.5)
 	CLONE_VIZ_TRANSPARENCY = (0.6, 0.6, 0.6)
 
+	CONTEXT_COLOR = QColor(200, 220, 255)
+
 	VIZ_LAYER_NAME = "AutoSculptor_VizLayer"
 
 	def __init__(self, parent=None):
@@ -131,34 +134,55 @@ class SculptingPanel(QWidget):
 		self.stroke_list = QTableWidget()
 		self.stroke_list.setColumnCount(5)
 		self.stroke_list.setSelectionBehavior(QAbstractItemView.SelectRows)
+		self.stroke_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
 		self.stroke_list.setHorizontalHeaderLabels(
 			["Type", "Mode", "SmpCount", "Size", "Strength"]
 		)
 		self.stroke_list.setMinimumHeight(150)
 		self.stroke_list.itemSelectionChanged.connect(self.on_stroke_selection_changed)
+		self.stroke_list.horizontalHeader().setStretchLastSection(True)
 		stroke_layout.addWidget(self.stroke_list)
-		stroke_btns_layout = QHBoxLayout()
+
+		hist_btns_layout = QHBoxLayout()
+		self.set_context_btn = QPushButton("Set Context")
+		self.set_context_btn.setToolTip(
+			"Set the selected strokes as the active context for suggestions."
+		)
+		self.set_context_btn.clicked.connect(self.on_set_context)
+		self.set_context_btn.setEnabled(False)
+		hist_btns_layout.addWidget(self.set_context_btn)
+
+		self.clear_context_btn = QPushButton("Clear Context")
+		self.clear_context_btn.setToolTip(
+			"Use the full stroke history for suggestions."
+		)
+		self.clear_context_btn.clicked.connect(self.on_clear_context)
+		self.clear_context_btn.setEnabled(False)
+		hist_btns_layout.addWidget(self.clear_context_btn)
+
 		self.delete_stroke_btn = QPushButton("Delete Stroke")
 		self.delete_stroke_btn.clicked.connect(self.on_delete_stroke)
 		self.delete_stroke_btn.setEnabled(False)
-		stroke_btns_layout.addWidget(self.delete_stroke_btn)
+		hist_btns_layout.addWidget(self.delete_stroke_btn)
 
 		self.clear_all_btn = QPushButton("Clear All")
 		self.clear_all_btn.clicked.connect(self.on_clear_all_clicked)
 		self.clear_all_btn.setEnabled(False)
-		stroke_btns_layout.addWidget(self.clear_all_btn)
+		hist_btns_layout.addWidget(self.clear_all_btn)
+		stroke_layout.addLayout(hist_btns_layout)
 
+		clone_btns_layout = QHBoxLayout()
 		self.clone_stroke_btn = QPushButton("Clone Stroke")
 		self.clone_stroke_btn.clicked.connect(self.on_clone_stroke_clicked)
 		self.clone_stroke_btn.setEnabled(False)
-		stroke_btns_layout.addWidget(self.clone_stroke_btn)
+		clone_btns_layout.addWidget(self.clone_stroke_btn)
 
 		self.cancel_clone_btn = QPushButton("Cancel Clone")
 		self.cancel_clone_btn.clicked.connect(self.cancel_clone_target_selection)
 		self.cancel_clone_btn.setVisible(False)
-		stroke_btns_layout.addWidget(self.cancel_clone_btn)
+		clone_btns_layout.addWidget(self.cancel_clone_btn)
 
-		stroke_layout.addLayout(stroke_btns_layout)
+		stroke_layout.addLayout(clone_btns_layout)
 
 		stroke_group.setLayout(stroke_layout)
 		layout.addWidget(stroke_group)
@@ -187,7 +211,7 @@ class SculptingPanel(QWidget):
 
 		self.setLayout(layout)
 
-		self.workflow = None
+		self.workflow: Optional[Workflow] = None
 
 		self.history_visualizer: Optional[StrokeVisualizer] = None
 
@@ -204,28 +228,50 @@ class SculptingPanel(QWidget):
 		Each stroke should be a dictionary with keys: brush_type, brush_mode, brush_falloff, brush_size, brush_strength
 		"""
 		self.stroke_list.setRowCount(0)  # Clear existing rows
-		self.clear_history_visualization()  # Clear history visualization before updating list
+		self.workflow = workflow
+		self.clear_history_visualization()
 
-		for stroke in workflow.strokes:
+		try:  # temporarily disconnect selection changed signal
+			self.stroke_list.itemSelectionChanged.disconnect(
+				self.on_stroke_selection_changed
+			)
+		except (TypeError, RuntimeError):
+			pass
+
+		active_context_indices = set(self.workflow.get_active_context_indices() or [])
+		for i, stroke in enumerate(self.workflow.strokes):
 			row_position = self.stroke_list.rowCount()
 			self.stroke_list.insertRow(row_position)
+
 			# Columns: ["Type", "Mode", "SmpCount", "Size", "Strength"]
-			self.stroke_list.setItem(
-				row_position, 0, QTableWidgetItem(stroke.stroke_type)
+			item_type = QTableWidgetItem(stroke.stroke_type or "N/A")
+			item_mode = QTableWidgetItem(stroke.brush_mode or "N/A")
+			item_count = QTableWidgetItem(str(len(stroke.samples)))
+			item_size = QTableWidgetItem(
+				approx(stroke.brush_size) if stroke.brush_size is not None else "N/A"
 			)
-			self.stroke_list.setItem(
-				row_position, 1, QTableWidgetItem(stroke.brush_mode)
+			item_strength = QTableWidgetItem(
+				approx(stroke.brush_strength)
+				if stroke.brush_strength is not None
+				else "N/A"
 			)
-			self.stroke_list.setItem(
-				row_position, 2, QTableWidgetItem(str(len(stroke.samples)))
-			)
-			self.stroke_list.setItem(
-				row_position, 3, QTableWidgetItem(approx(stroke.brush_size))
-			)
-			self.stroke_list.setItem(
-				row_position, 4, QTableWidgetItem(approx(stroke.brush_strength))
-			)
-		self.workflow = workflow
+
+			items = [item_type, item_mode, item_count, item_size, item_strength]
+
+			if i in active_context_indices:
+				for item in items:
+					item.setBackground(self.CONTEXT_COLOR)
+
+			for item in items:
+				item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+
+			self.stroke_list.setItem(row_position, 0, item_type)
+			self.stroke_list.setItem(row_position, 1, item_mode)
+			self.stroke_list.setItem(row_position, 2, item_count)
+			self.stroke_list.setItem(row_position, 3, item_size)
+			self.stroke_list.setItem(row_position, 4, item_strength)
+
+		self.stroke_list.itemSelectionChanged.connect(self.on_stroke_selection_changed)
 
 		if len(self.workflow.strokes) > 0:
 			self.delete_stroke_btn.setEnabled(True)
@@ -350,20 +396,14 @@ class SculptingPanel(QWidget):
 
 	def on_enable_capture_changed(self, state):
 		main_window = self.parent().parent().parent()
-		print(
-			f"SculptingPanel: on_enable_capture_changed - main_window: {main_window}, sculpt_capture: {hasattr(main_window, 'sculpt_capture') and main_window.sculpt_capture is not None}"
-		)
+
 		if (
 			main_window
 			and isinstance(main_window, AutoSculptorToolWindow)
 			and hasattr(main_window, "sculpt_capture")
 			and main_window.sculpt_capture
 		):
-			print(
-				f"SculptingPanel: on_enable_capture_changed - sculpt_capture.is_capturing: {main_window.sculpt_capture.is_capturing}"
-			)
 			if state == Qt.CheckState.Checked.value:
-				print("SculptingPanel: Attempting to enable capture...")
 				if not main_window.sculpt_capture.mesh_name:
 					self.on_select_mesh()
 
@@ -375,6 +415,8 @@ class SculptingPanel(QWidget):
 					om2.MGlobal.displayWarning(
 						"Please select a mesh before enabling capture."
 					)
+					self.enable_capture.setChecked(False)
+					self.mesh_button.setEnabled(True)
 					print("SculptingPanel: Cannot start capture, no mesh selected.")
 			else:
 				print("SculptingPanel: Disabling capture...")
@@ -399,7 +441,8 @@ class SculptingPanel(QWidget):
 			self.clear_clone_preview_visualization()
 
 	def on_delete_stroke(self):
-		self.clear_clone_preview_visualization()  # Clear pending clone viz since we are deleting history?
+		# self.clear_history_visualization()
+		self.clear_clone_preview_visualization()
 
 		selected_indices = self.stroke_list.selectedIndexes()
 		if selected_indices:
@@ -432,18 +475,16 @@ class SculptingPanel(QWidget):
 		Updates the sample list based on the selected stroke.
 		"""
 		self.clear_history_visualization()  # Clear previous viz first
-		self.clear_clone_preview_visualization()  # Clear pending clone viz?
+		# self.clear_clone_preview_visualization()  # Clear pending clone viz?
 
 		selected_indexes = self.stroke_list.selectedIndexes()
-		if selected_indexes:
-			selected_row = selected_indexes[0].row()
-			print(selected_row)
-			self.update_sample_list(self.workflow.strokes[selected_row])
-			self.delete_stroke_btn.setEnabled(True)
-			self.clone_stroke_btn.setEnabled(True)
+		selected_rows = sorted(list(set(index.row() for index in selected_indexes)))
 
-			if self.workflow:
+		if len(selected_rows) == 1:
+			selected_row = selected_rows[0]
+			if self.workflow and 0 <= selected_row < len(self.workflow.strokes):
 				selected_stroke = self.workflow.strokes[selected_row]
+				self.update_sample_list(selected_stroke)
 
 				if selected_stroke and selected_stroke.samples:
 					try:
@@ -491,10 +532,70 @@ class SculptingPanel(QWidget):
 
 						traceback.print_exc()
 						self.history_visualizer = None
+				else:
+					self.sample_list.setRowCount(0)
 		else:
 			self.delete_stroke_btn.setEnabled(False)
 			self.clone_stroke_btn.setEnabled(False)
 			self.sample_list.setRowCount(0)
+
+		has_selection = len(selected_rows) > 0
+		is_capture_active = (
+			self.parent().parent().parent()
+			and isinstance(self.parent().parent().parent(), AutoSculptorToolWindow)
+			and hasattr(self.parent().parent().parent(), "sculpt_capture")
+			and self.parent().parent().parent().sculpt_capture
+			and self.parent().parent().parent().sculpt_capture.is_capturing
+		)
+
+		self.delete_stroke_btn.setEnabled(has_selection)
+		self.set_context_btn.setEnabled(has_selection)
+
+		can_start_clone = (
+			has_selection and len(selected_rows) == 1 and is_capture_active
+		)
+		if (
+			not self.is_waiting_for_clone_target
+			and self.clone_stroke_btn.text() == "Clone Stroke"
+		):
+			self.clone_stroke_btn.setEnabled(can_start_clone)
+
+	def on_set_context(self):
+		"""Sets the currently selected strokes as the active context."""
+		selected_rows = sorted(
+			list(set(index.row() for index in self.stroke_list.selectedIndexes()))
+		)
+		if not selected_rows:
+			om2.MGlobal.displayWarning("No strokes selected to set as context.")
+			return
+
+		print(f"SculptingPanel: Setting context to selected rows: {selected_rows}")
+		main_window = self.parent().parent().parent()
+		if (
+			main_window
+			and isinstance(main_window, AutoSculptorToolWindow)
+			and hasattr(main_window, "sculpt_capture")
+			and main_window.sculpt_capture
+		):
+			main_window.sculpt_capture.set_active_context(selected_rows)
+			self.update(main_window.sculpt_capture.current_workflow)
+		else:
+			print("SculptingPanel: Capture system not available to set context.")
+
+	def on_clear_context(self):
+		"""Clears the active context, using the full history."""
+		print("SculptingPanel: Clearing active context.")
+		main_window = self.parent().parent().parent()
+		if (
+			main_window
+			and isinstance(main_window, AutoSculptorToolWindow)
+			and hasattr(main_window, "sculpt_capture")
+			and main_window.sculpt_capture
+		):
+			main_window.sculpt_capture.clear_active_context()
+			self.update(main_window.sculpt_capture.current_workflow)
+		else:
+			print("SculptingPanel: Capture system not available to clear context.")
 
 	def on_clone_stroke_clicked(self):
 		if self.clone_stroke_btn.text() == "Clone Stroke":
@@ -594,18 +695,16 @@ class SculptingPanel(QWidget):
 
 	def _kill_target_selection_scriptJob(self):
 		if self.target_selection_scriptJob:
+			job_id = self.target_selection_scriptJob
+			self.target_selection_scriptJob = None
 			try:
-				if cmds.scriptJob(exists=self.target_selection_scriptJob):
-					cmds.scriptJob(kill=self.target_selection_scriptJob, force=True)
+				if cmds.scriptJob(exists=job_id):
+					cmds.scriptJob(kill=job_id, force=True)
 					print(
-						f"SculptingPanel: Killed target selection script job {self.target_selection_scriptJob}"
+						f"SculptingPanel: Killed target selection script job {job_id}"
 					)
 			except Exception as e:
-				print(
-					f"SculptingPanel: Error killing script job {self.target_selection_scriptJob}: {e}"
-				)
-			finally:
-				self.target_selection_scriptJob = None
+				print(f"SculptingPanel: Error killing script job {job_id}: {e}")
 
 	def cancel_clone_target_selection(self):
 		self._kill_target_selection_scriptJob()
@@ -884,6 +983,8 @@ class SculptingPanel(QWidget):
 		self.delete_stroke_btn.clicked.disconnect(self.on_delete_stroke)
 		self.clone_stroke_btn.clicked.disconnect(self.on_clone_stroke_clicked)
 		self.clear_all_btn.clicked.disconnect(self.on_clear_all_clicked)
+		self.set_context_btn.clicked.disconnect(self.on_set_context)
+		self.clear_context_btn.clicked.disconnect(self.on_clear_context)
 
 		# TODO: Make sure to disconnect other signals here if we connect them later
 

@@ -2,8 +2,8 @@
 Core data structures
 """
 
-from typing import Optional
-import numpy as np
+from typing import Optional, List
+import numpy as np  # type: ignore
 
 # from autosculptor.core.brush import BrushMode
 
@@ -107,6 +107,7 @@ class Workflow:
 		"""Initialize an empty workflow."""
 		self.strokes = []
 		self.region = None
+		self.active_context_indices: Optional[List[int]] = None
 
 	def add_stroke(self, stroke):
 		"""
@@ -126,8 +127,62 @@ class Workflow:
 		"""
 		return self.strokes
 
+	def set_active_context(self, indices: List[int]):
+		"""Sets the active context using a list of valid stroke indices."""
+		valid_indices = [i for i in indices if 0 <= i < len(self.strokes)]
+		if valid_indices:
+			self.active_context_indices = sorted(list(set(valid_indices)))
+			print(
+				f"Workflow: Active context set to indices: {self.active_context_indices}"
+			)
+		else:
+			print(
+				"Workflow: Attempted to set empty or invalid context. Clearing context."
+			)
+			self.clear_active_context()
+
+	def clear_active_context(self):
+		"""Clears the active context, making the full history active."""
+		self.active_context_indices = None
+		print("Workflow: Active context cleared.")
+
+	def get_active_context_strokes(self) -> List[Stroke]:
+		"""Returns the list of strokes in the active context, or all strokes if no context is set."""
+		if self.active_context_indices is None:
+			return self.strokes
+		else:
+			valid_context_strokes = []
+			valid_indices = []
+			for index in self.active_context_indices:
+				if 0 <= index < len(self.strokes):
+					valid_context_strokes.append(self.strokes[index])
+					valid_indices.append(index)
+			if len(valid_indices) != len(self.active_context_indices):
+				print("Workflow: Context indices updated due to stroke removal.")
+				self.active_context_indices = valid_indices if valid_indices else None
+
+			return (
+				valid_context_strokes if self.active_context_indices else self.strokes
+			)
+
+	def get_active_context_indices(self) -> Optional[List[int]]:
+		"""Returns the list of indices in the active context, or None."""
+		if self.active_context_indices is not None:
+			valid_indices = [
+				i for i in self.active_context_indices if 0 <= i < len(self.strokes)
+			]
+			if len(valid_indices) != len(self.active_context_indices):
+				print("Workflow: Context indices updated due to stroke removal.")
+				self.active_context_indices = valid_indices if valid_indices else None
+		return self.active_context_indices
+
 	def __len__(self):
 		return len(self.strokes)
 
 	def __repr__(self):
-		return f"Workflow(strokes={len(self.strokes)})"
+		context_info = (
+			f" (Context: {self.active_context_indices})"
+			if self.active_context_indices
+			else " (Context: Full)"
+		)
+		return f"Workflow(strokes={len(self.strokes)}{context_info})"
