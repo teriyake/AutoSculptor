@@ -1,7 +1,8 @@
-import maya.cmds as cmds  # type: ignore
+import maya.cmds as cmds
 import maya.OpenMayaUI as omui
 import maya.OpenMaya as om
-import maya.api.OpenMaya as om2  # type: ignore
+import maya.api.OpenMaya as om2
+import maya.utils
 import numpy as np
 import time
 
@@ -48,21 +49,18 @@ DEFAULT_BRUSH_TYPE = "surface"
 
 
 def screenToViewport(x, y):
-	# Obtain the active 3D view
+
 	view = omui.M3dView.active3dView()
 
-	# Prepare variables to store the screen position
 	x_util = om.MScriptUtil()
 	y_util = om.MScriptUtil()
 	x_ptr = x_util.asIntPtr()
 	y_ptr = y_util.asIntPtr()
 
-	# Get the screen position of the viewport
 	view.getScreenPosition(x_ptr, y_ptr)
 	vpx = om.MScriptUtil.getInt(x_ptr)
 	vpy = om.MScriptUtil.getInt(y_ptr)
 
-	# Get the viewport's width and height
 	width = view.portWidth()
 	height = view.portHeight()
 
@@ -132,7 +130,6 @@ def viewportToObjSurf(mesh_name, vpx, vpy):
 
 
 def get_autosculpt_brush_type(maya_tool_name):
-	"""Infers AutoSculptor brush type from Maya tool name."""
 
 	return MAYA_BRUSH_TO_AUTOSCULPT_TYPE.get(maya_tool_name, DEFAULT_BRUSH_TYPE)
 
@@ -145,7 +142,7 @@ def get_tool_name_callback(tool_name):
 
 
 def get_autosculpt_brush_mode(ctx, maya_tool_name):
-	"""Infers AutoSculptor brush mode."""
+
 	if maya_tool_name == "Smooth":
 		return BrushMode.SMOOTH
 
@@ -158,9 +155,6 @@ def get_autosculpt_brush_mode(ctx, maya_tool_name):
 
 
 class SculptCapture:
-	"""
-	Class to manage the sculpting capture process.
-	"""
 
 	INTERPOLATED_SAMPLES_PER_EVENT = 5
 	STROKE_END_TIMEOUT = 0.25
@@ -214,6 +208,18 @@ class SculptCapture:
 				self.current_workflow.add_stroke(current_stroke)
 				if self.update_history_callback:
 					self.update_history_callback(self.copy_workflow())
+
+				if self.suggestions_enabled and len(self.current_workflow.strokes) > 1:
+					print(
+						"SculptCapture: Generating suggestions after mouse release..."
+					)
+					self.generate_suggestions()
+				elif self.suggestions_enabled:
+					print(
+						"SculptCapture: Suggestions enabled, but not enough history yet after mouse release."
+					)
+				else:
+					self.clear_suggestions()
 
 				# Record Status
 				self.recording = False
@@ -286,7 +292,6 @@ class SculptCapture:
 				self.active_stroke_in_progress.add_sample(sample)
 
 	def get_world_space_positions(self, mesh_name):
-		"""Gets world-space vertex positions for a mesh by name."""
 		try:
 			selection_list = om2.MSelectionList()
 			selection_list.add(mesh_name)
@@ -298,7 +303,6 @@ class SculptCapture:
 			return None
 
 	def get_world_space_normals(self, mesh_name):
-		"""Gets world-space normals for a mesh by name."""
 		try:
 			selection_list = om2.MSelectionList()
 			selection_list.add(mesh_name)
@@ -310,10 +314,6 @@ class SculptCapture:
 			return None
 
 	def get_active_sculpt_tool(self):
-		"""
-		Gets the name of the active sculpting tool context.
-		Returns the context name (string) or None.
-		"""
 		context = cmds.currentCtx()
 
 		if "sculptMesh" in context:
@@ -321,7 +321,6 @@ class SculptCapture:
 		return None
 
 	def get_brush_size_and_pressure(self, tool_name):
-		"""Gets the brush size and pressure using sculptMeshCacheCtx."""
 		if not tool_name:
 			return None
 
@@ -340,9 +339,6 @@ class SculptCapture:
 			return 1.0, 1.0
 
 	def _ensure_synthesizer_mesh(self, mesh_data: MeshData):
-		"""
-		Ensures synthesizer exists and its parameterizer has current mesh data.
-		"""
 		if not self.synthesizer:
 			try:
 				self.synthesizer = StrokeSynthesizer(mesh_data)
@@ -372,7 +368,6 @@ class SculptCapture:
 				print(f"SculptCapture: Error initializing missing parameterizer: {e}")
 
 	def process_mesh_changes(self):
-		"""Processes mesh changes after a potential sculpt operation."""
 		if not self.mesh_name:
 			return
 
@@ -663,32 +658,52 @@ class SculptCapture:
 			viz.clear()
 		self.suggestion_visualizers.clear()
 
+		for viz in self.suggestion_visualizers:
+			viz.clear()
+		self.suggestion_visualizers.clear()
+
 		if self.suggestions_enabled and self.current_suggestions:
 			print(f"Visualizing {len(self.current_suggestions)} suggestions.")
-			for suggestion_stroke in self.current_suggestions:
-				if suggestion_stroke and len(suggestion_stroke.samples) > 0:
-					try:
-						visualizer = StrokeVisualizer(suggestion_stroke)
-						viz_radius = (
-							suggestion_stroke.samples[0].size * 0.5
-							if suggestion_stroke.samples
-							else 0.2
-						)
-						suggestion_viz_tube = visualizer.visualize(viz_radius, 8)
-						cmds.select(suggestion_viz_tube)
-						disp_layer = cmds.createDisplayLayer()
-						cmds.setAttr(f"{disp_layer}.displayType", 2)
-						cmds.select(None)
-
-						self.suggestion_visualizers.append(visualizer)
-
-					except Exception as viz_e:
-						print(f"SculptCapture: Error visualizing suggestion: {viz_e}")
+			# DEFER the visualization (maya might be rendering the viewport now)
+			maya.utils.executeDeferred(self._create_suggestion_visualizers)
 		else:
 			print(f"SculptCapture: Nothing to visualize!")
 
+	def _create_suggestion_visualizers(self):
+		"""Helper method to create visualizers, called deferred."""
+		for suggestion_stroke in self.current_suggestions:
+			if suggestion_stroke and len(suggestion_stroke.samples) > 0:
+				try:
+					visualizer = StrokeVisualizer(suggestion_stroke)
+					viz_radius = (
+						suggestion_stroke.samples[0].size * 0.5
+						if suggestion_stroke.samples
+						else 0.2
+					)
+					suggestion_viz_tube = visualizer.visualize(viz_radius, 8)
+					if suggestion_viz_tube:
+						disp_layer = maya.utils.executeInMainThreadWithResult(
+							lambda: cmds.createDisplayLayer()
+						)
+						maya.utils.executeInMainThreadWithResult(
+							lambda: cmds.setAttr(f"{disp_layer}.displayType", 2)
+						)
+						maya.utils.executeInMainThreadWithResult(
+							lambda: cmds.editDisplayLayerMembers(
+								disp_layer, suggestion_viz_tube, noRecurse=True
+							)
+						)
+
+						self.suggestion_visualizers.append(visualizer)
+					else:
+						print(
+							f"SculptCapture: Failed to create visualization tube for suggestion."
+						)
+
+				except Exception as viz_e:
+					print(f"SculptCapture: Error visualizing suggestion: {viz_e}")
+
 	def get_selected_mesh_name(self):
-		"""Gets the full path of the selected mesh shape node."""
 		selected_objects = cmds.ls(selection=True, long=True)
 		if not selected_objects:
 			om2.MGlobal.displayError("No object selected")
@@ -710,7 +725,6 @@ class SculptCapture:
 			return None
 
 	def generate_suggestions(self):
-		"""Generate autocomplete suggestions using StrokeSynthesizer"""
 		if not self.mesh_name or not cmds.objExists(self.mesh_name):
 			print("SculptCapture: Mesh no longer exists, clearing reference")
 			self.mesh_name = None
@@ -767,9 +781,7 @@ class SculptCapture:
 		return new_workflow
 
 	def _store_current_camera_state(self):
-		"""
-		Stores the current active camera's position, target, and up vector.
-		"""
+
 		cam_details = get_active_camera_details()
 		if not cam_details:
 			self.previous_camera_state = None
@@ -790,7 +802,6 @@ class SculptCapture:
 			self.previous_camera_state = None
 
 	def _update_auto_camera(self):
-		"""Moves the active camera to view the first suggestion."""
 		if not self.auto_camera_enabled:
 			return
 		if not self.current_suggestions:
@@ -847,7 +858,6 @@ class SculptCapture:
 			traceback.print_exc()
 
 	def restore_previous_camera(self):
-		"""Restores the camera to the state before the last automatic move."""
 		if self.previous_camera_state is None:
 			print("No previous camera state stored to restore.")
 			return
@@ -881,7 +891,7 @@ class SculptCapture:
 			self.listener = None
 
 	def register_script_job(self):
-		"""Registers a script job to monitor for changes after sculpting."""
+
 		if self.script_job_number is None:
 			self.mesh_name = self.get_selected_mesh_name()
 			if self.mesh_name:
@@ -898,7 +908,7 @@ class SculptCapture:
 			print("Script job already registered.")
 
 	def unregister_script_job(self):
-		"""Unregisters the script job."""
+
 		if self.script_job_number is not None:
 			cmds.scriptJob(kill=self.script_job_number, force=True)
 			self.script_job_number = None
@@ -918,7 +928,7 @@ class SculptCapture:
 			self.clone_preview_visualizer.clear()
 
 	def clear_suggestions(self):
-		"""Clears the current suggestion strokes and updates the UI."""
+
 		if self.current_suggestions:
 			print("SculptCapture: Clearing suggestions.")
 		self.current_suggestions = []
@@ -947,7 +957,7 @@ class SculptCapture:
 			print(f"WARNING: Invalid stroke index for deletion: {stroke_index}")
 
 	def visualize_suggestions(self):
-		"""Creates visualizers for the current suggestions."""
+
 		self.clear_suggestion_visualizers()
 		if not self.mesh_name or not cmds.objExists(self.mesh_name):
 			print("Cannot visualize suggestions, mesh not valid.")
@@ -980,7 +990,7 @@ class SculptCapture:
 			self.visualize_suggestions()
 
 	def accept_selected_suggestion(self, suggestion_index: int):
-		"""Applies the selected suggestion stroke to the mesh."""
+
 		if not self.is_capturing:
 			om2.MGlobal.displayWarning(
 				"Cannot accept suggestion: Capture is not active."
@@ -1142,9 +1152,7 @@ class SculptCapture:
 				cmds.undoInfo(closeChunk=True)
 
 	def apply_cloned_stroke(self, cloned_stroke: Stroke):
-		"""
-		Applies a validated cloned stroke to the mesh and adds it to history.
-		"""
+
 		if not self.is_capturing:
 			raise RuntimeError("Cannot apply clone: Capture is not active.")
 		if not self.mesh_name or not cmds.objExists(self.mesh_name):
@@ -1186,21 +1194,17 @@ class SculptCapture:
 				else BrushMode.ADD,
 				falloff=cloned_stroke.brush_falloff or "smooth",
 			)
-			# print(
-			# f"  Applying using Brush: {brush_class.__name__}, Size: {brush.size:.2f}, Strength: {brush.strength:.2f}, Mode: {brush.mode.name}, Falloff: {brush.falloff}"
-			# )
 
 			apply_success = True
 			num_applied = 0
 			for i, sample in enumerate(cloned_stroke.samples):
-				# print(f"  Applying sample {i+1}/{len(cloned_stroke.samples)} at {sample.position}") # Verbose
+
 				try:
 					brush.apply_to_mesh(mesh_data, sample)
 					num_applied += 1
 				except Exception as apply_err:
 					print(f"  Error applying cloned sample {i}: {apply_err}")
-					# apply_success = False
-					# break
+
 					print("   Skipping sample and attempting to continue...")
 
 			print(f"  Applied {num_applied} samples from cloned stroke.")
@@ -1209,7 +1213,7 @@ class SculptCapture:
 			if final_mesh_data and self.synthesizer and self.synthesizer.parameterizer:
 				self._ensure_synthesizer_mesh(final_mesh_data)
 				camera_lookat = get_active_camera_lookat_vector()
-				# print("  Parameterizing applied clone stroke...")
+
 				try:
 					self.synthesizer.parameterizer.parameterize_stroke(
 						cloned_stroke, camera_lookat
@@ -1232,7 +1236,7 @@ class SculptCapture:
 				self.update_history_callback(self.copy_workflow())
 
 			if self.suggestions_enabled:
-				# print("  Regenerating suggestions after clone application...")
+
 				self.generate_suggestions()
 
 			if undo_chunk_is_open:
@@ -1256,7 +1260,7 @@ class SculptCapture:
 			raise
 
 	def clear_history(self):
-		"""Clears the entire sculpting history."""
+
 		print("SculptCapture: Clearing history.")
 		self.current_workflow = Workflow()
 		if self.update_history_callback:
@@ -1264,7 +1268,7 @@ class SculptCapture:
 		self.clear_suggestions()
 
 	def reject_suggestion(self, suggestion_index: int):
-		"""Rejects (removes) a suggestion at the given index."""
+
 		if suggestion_index < 0 or suggestion_index >= len(self.current_suggestions):
 			print(
 				f"WARNING: Invalid suggestion index for rejection: {suggestion_index}"

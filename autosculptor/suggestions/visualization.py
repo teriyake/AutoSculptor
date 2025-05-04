@@ -2,6 +2,7 @@ from autosculptor.core.data_structures import Sample, Stroke, Workflow
 import numpy as np
 import maya.cmds as cmds  # type: ignore
 import maya.api.OpenMaya as om
+import maya.utils
 import math
 
 
@@ -161,28 +162,7 @@ class StrokeVisualizer:
 		if len(positions) < 2:
 			return None
 
-		# Store the original selection
-		original_selection = cmds.ls(selection=True, long=True) or []
-
 		tube = self.create_tube(positions, radius, sections)
-
-		# Try to restore the selection
-		try:
-			# Make sure the orignal selection still exists
-			valid_original_selection = [
-				item for item in original_selection if cmds.objExists(item)
-			]
-			if valid_original_selection:
-				cmds.select(valid_original_selection, replace=True)
-			else:
-				cmds.select(clear=True)
-				if original_selection:
-					print(
-						"StrokeVisualizer: Original selection no longer exists, clearing selection."
-					)
-		except Exception as e:
-			print(f"StrokeVisualizer: Warning! Failed to restore selection: {e}")
-			cmds.select(clear=True)
 
 		return tube
 
@@ -198,9 +178,12 @@ class StrokeVisualizer:
 
 		if nodes_to_delete:
 			try:
+				cmds.undoInfo(state=False)  # disable undo here
 				cmds.delete(nodes_to_delete)
+				cmds.undoInfo(state=True)
 			except Exception as e:
 				print(f"StrokeVisualizer: Error deleting nodes: {e}")
+				cmds.undoInfo(state=True)  # re-enable undo if some error occurs
 
 		self.created_nodes = []
 		print(f"StrokeVisualizer: Clearing complete for instance {id(self)}.")
