@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (  # type: ignore
 	QAbstractItemView,
 )
 from PySide6.QtCore import Qt  # type: ignore
-from PySide6.QtGui import QColor  # type: ignore
+from PySide6.QtGui import QColor, QShortcut, QKeySequence  # type: ignore
 import maya.OpenMayaUI as omui  # type: ignore
 import maya.api.OpenMaya as om2  # type: ignore
 from shiboken6 import wrapInstance  # type: ignore
@@ -1377,6 +1377,57 @@ class AutoSculptorToolWindow(MayaQWidgetDockableMixin, QDialog):
 			update_suggestion_callback=self.suggestion_tab.update,
 		)
 
+		self._setup_shortcuts()
+
+	def _setup_shortcuts(self):
+		"""Sets up PySide6 shortcuts for the tool window."""
+		main_window = get_maya_main_window()
+
+		self.shortcut_toggle_capture = QShortcut(
+			QKeySequence(Qt.ControlModifier | Qt.AltModifier | Qt.Key_X), self
+		)
+		self.shortcut_toggle_capture.setContext(Qt.ApplicationShortcut)
+		self.shortcut_toggle_capture.activated.connect(
+			lambda: cmds.autoSculptorAction(toggleCapture=True)
+		)
+
+		self.shortcut_toggle_suggestions = QShortcut(
+			QKeySequence(Qt.ControlModifier | Qt.AltModifier | Qt.Key_D), self
+		)
+		self.shortcut_toggle_suggestions.setContext(Qt.ApplicationShortcut)
+		self.shortcut_toggle_suggestions.activated.connect(
+			lambda: cmds.autoSculptorAction(toggleSuggestions=True)
+		)
+
+		self.shortcut_accept_selected = QShortcut(
+			QKeySequence(Qt.ControlModifier | Qt.AltModifier | Qt.Key_A), self
+		)
+		self.shortcut_accept_selected.setContext(Qt.ApplicationShortcut)
+		self.shortcut_accept_selected.activated.connect(
+			self.suggestion_tab.on_accept_sel_clicked
+		)
+
+		self.shortcut_accept_all = QShortcut(
+			QKeySequence(
+				Qt.ControlModifier | Qt.AltModifier | Qt.ShiftModifier | Qt.Key_A
+			),
+			self,
+		)
+		self.shortcut_accept_all.setContext(Qt.ApplicationShortcut)
+		self.shortcut_accept_all.activated.connect(
+			self.suggestion_tab.on_accept_all_clicked
+		)
+
+		self.shortcut_reject_selected = QShortcut(
+			QKeySequence(Qt.ControlModifier | Qt.AltModifier | Qt.Key_Z), self
+		)
+		self.shortcut_reject_selected.setContext(Qt.ApplicationShortcut)
+		self.shortcut_reject_selected.activated.connect(
+			self.suggestion_tab.on_reject_sel_clicked
+		)
+
+		print("AutoSculptorToolWindow: PySide6 shortcuts setup.")
+
 	def closeEvent(self, event):
 		"""Override close event for cleanup."""
 		if hasattr(self, "sculpting_tab") and self.sculpting_tab:
@@ -1387,6 +1438,20 @@ class AutoSculptorToolWindow(MayaQWidgetDockableMixin, QDialog):
 		if hasattr(self, "sculpt_capture") and self.sculpt_capture:
 			self.sculpt_capture.cleanup()
 			self.sculpt_capture = None
+
+		if hasattr(self, "shortcut_toggle_capture") and self.shortcut_toggle_capture:
+			self.shortcut_toggle_capture.deleteLater()
+		if (
+			hasattr(self, "shortcut_toggle_suggestions")
+			and self.shortcut_toggle_suggestions
+		):
+			self.shortcut_toggle_suggestions.deleteLater()
+		if hasattr(self, "shortcut_accept_selected") and self.shortcut_accept_selected:
+			self.shortcut_accept_selected.deleteLater()
+		if hasattr(self, "shortcut_accept_all") and self.shortcut_accept_all:
+			self.shortcut_accept_all.deleteLater()
+		if hasattr(self, "shortcut_reject_selected") and self.shortcut_reject_selected:
+			self.shortcut_reject_selected.deleteLater()
 
 		super().closeEvent(event)
 		print("AutoSculptorToolWindow cleaned up.")

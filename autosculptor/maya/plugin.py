@@ -14,25 +14,8 @@ from autosculptor.core.freeform_brush import FreeformBrush
 from autosculptor.core.brush import BrushMode
 from autosculptor.core.mesh_interface import MeshInterface
 from autosculptor.utils.utils import Utils
-from autosculptor.maya.test_ui import TestUI
-from autosculptor.maya.viewport_drawer import SuggestionDrawer
 
 CMD_AUTO_SCULPTOR_TEST = om.MTypeId(0x8723)
-
-COMMAND_CATEGORY = "AutoSculptor"
-TOGGLE_CAPTURE_CMD_NAME = "autoSculptorToggleCaptureCmd"
-TOGGLE_SUGGESTIONS_CMD_NAME = "autoSculptorToggleSuggestionsCmd"
-ACCEPT_SELECTED_CMD_NAME = "autoSculptorAcceptSelectedCmd"
-ACCEPT_ALL_CMD_NAME = "autoSculptorAcceptAllCmd"
-RESTORE_CAMERA_CMD_NAME = "autoSculptorRestoreCameraCmd"
-
-NAMED_COMMANDS = [
-	TOGGLE_CAPTURE_CMD_NAME,
-	TOGGLE_SUGGESTIONS_CMD_NAME,
-	ACCEPT_SELECTED_CMD_NAME,
-	ACCEPT_ALL_CMD_NAME,
-	RESTORE_CAMERA_CMD_NAME,
-]
 
 
 class AutoSculptorTestCmd(OpenMayaMPx.MPxCommand):
@@ -230,51 +213,191 @@ class AutoSculptorTestCmd(OpenMayaMPx.MPxCommand):
 		om.MGlobal.displayInfo("AutoSculptor test completed successfully!")
 
 
-class AutoSculptorDrawNode(OpenMayaMPx.MPxLocatorNode):
-	"""Dummy node to host the draw override."""
+class AutoSculptorActionCmd(OpenMayaMPx.MPxCommand):
+	"""
+	Command to perform various AutoSculptor actions like toggling capture/suggestions,
+	and accepting/rejecting suggestions.
+	"""
 
-	id = om.MTypeId(0x8724)
+	kPluginCmdName = "autoSculptorAction"
 
-	def __init__(self):
-		OpenMayaMPx.MPxLocatorNode.__init__(self)
-
-	@classmethod
-	def creator(cls):
-		return OpenMayaMPx.asMPxPtr(cls())
-
-	@classmethod
-	def initialize(cls):
-		pass
-
-
-class AutoSculptorRestoreCameraCmd(OpenMayaMPx.MPxCommand):
-	kPluginCmdName = RESTORE_CAMERA_CMD_NAME
+	kToggleCaptureFlag = "-tc"
+	kToggleCaptureLongFlag = "-toggleCapture"
+	kToggleSuggestionsFlag = "-ts"
+	kToggleSuggestionsLongFlag = "-toggleSuggestions"
+	kAcceptSelectedFlag = "-as"
+	kAcceptSelectedLongFlag = "-acceptSelectedSuggestion"
+	kAcceptAllFlag = "-aa"
+	kAcceptAllLongFlag = "-acceptAllSuggestions"
+	kRejectSelectedFlag = "-rs"
+	kRejectSelectedLongFlag = "-rejectSelectedSuggestion"
 
 	def __init__(self):
 		OpenMayaMPx.MPxCommand.__init__(self)
 
 	@staticmethod
 	def cmdCreator():
-		return AutoSculptorRestoreCameraCmd()
-
-	def doIt(self, args):
+		print("DEBUG: AutoSculptorActionCmd cmdCreator called")
 		try:
-			import autosculptor.ui.ui as auto_sculptor_ui
-
-			instance = auto_sculptor_ui.sculpting_tool_window_instance
-			if instance and instance.sculpt_capture:
-				instance.sculpt_capture.restore_previous_camera()
-			else:
-				om.MGlobal.displayWarning("AutoSculptor capture system not active.")
+			cmd_instance = AutoSculptorActionCmd()
+			print("DEBUG: AutoSculptorActionCmd instance created successfully")
+			return cmd_instance
 		except Exception as e:
-			om.MGlobal.displayError(f"Error restoring camera: {e}")
+			print(f"DEBUG: Exception in AutoSculptorActionCmd cmdCreator: {e}")
 			import traceback
 
 			traceback.print_exc()
+			raise
 
 	@staticmethod
 	def syntaxCreator():
-		return om.MSyntax()
+		"""
+		Create the syntax object for the command.
+		"""
+		syntax = om.MSyntax()
+		syntax.addFlag(
+			AutoSculptorActionCmd.kToggleCaptureFlag,
+			AutoSculptorActionCmd.kToggleCaptureLongFlag,
+			om.MSyntax.kBoolean,
+		)
+		syntax.addFlag(
+			AutoSculptorActionCmd.kToggleSuggestionsFlag,
+			AutoSculptorActionCmd.kToggleSuggestionsLongFlag,
+			om.MSyntax.kBoolean,
+		)
+		syntax.addFlag(
+			AutoSculptorActionCmd.kAcceptSelectedFlag,
+			AutoSculptorActionCmd.kAcceptSelectedLongFlag,
+			om.MSyntax.kBoolean,
+		)
+		syntax.addFlag(
+			AutoSculptorActionCmd.kAcceptAllFlag,
+			AutoSculptorActionCmd.kAcceptAllLongFlag,
+			om.MSyntax.kBoolean,
+		)
+		syntax.addFlag(
+			AutoSculptorActionCmd.kRejectSelectedFlag,
+			AutoSculptorActionCmd.kRejectSelectedLongFlag,
+			om.MSyntax.kBoolean,
+		)
+
+		return syntax
+
+	def doIt(self, args):
+		try:
+			arg_data = om.MArgDatabase(self.syntax(), args)
+
+			global sculpting_tool_window
+			if (
+				"sculpting_tool_window" not in globals()
+				or not sculpting_tool_window
+				or not hasattr(sculpting_tool_window, "sculpt_capture")
+			):
+				om.MGlobal.displayWarning(
+					"AutoSculptor UI window is not open or not fully initialized."
+				)
+				return
+
+			sculpt_capture = sculpting_tool_window.sculpt_capture
+
+			if arg_data.isFlagSet(self.kToggleCaptureFlag):
+				if sculpt_capture.is_capturing:
+					sculpt_capture.stop_capture()
+					om.MGlobal.displayInfo("AutoSculptor Capture Disabled.")
+					sculpting_tool_window.sculpting_tab.enable_capture.setChecked(False)
+				else:
+					if not sculpt_capture.mesh_name:
+						sculpting_tool_window.sculpting_tab.on_select_mesh()
+
+					if sculpt_capture.mesh_name:
+						sculpt_capture.start_capture()
+						om.MGlobal.displayInfo("AutoSculptor Capture Enabled.")
+						sculpting_tool_window.sculpting_tab.enable_capture.setChecked(
+							True
+						)
+					else:
+						om.MGlobal.displayWarning(
+							"Cannot enable capture: No mesh selected."
+						)
+						sculpting_tool_window.sculpting_tab.enable_capture.setChecked(
+							False
+						)
+
+			if arg_data.isFlagSet(self.kToggleSuggestionsFlag):
+				is_enabled = sculpt_capture.suggestions_enabled
+				sculpt_capture.set_suggestions_enabled(not is_enabled)
+				om.MGlobal.displayInfo(
+					f"AutoSculptor Suggestions {'Enabled' if not is_enabled else 'Disabled'}."
+				)
+				sculpting_tool_window.suggestion_tab.enable_prediction.setChecked(
+					not is_enabled
+				)
+
+			if arg_data.isFlagSet(self.kAcceptSelectedFlag):
+				selected_indexes = (
+					sculpting_tool_window.suggestion_tab.stroke_list.selectedIndexes()
+				)
+				if selected_indexes:
+					selection_index = selected_indexes[0].row()
+					if sculpt_capture.suggestions_enabled:
+						sculpt_capture.accept_selected_suggestion(selection_index)
+						om.MGlobal.displayInfo(
+							f"Accepted suggestion index {selection_index}."
+						)
+					else:
+						om.MGlobal.displayWarning(
+							"Suggestions are disabled. Cannot accept."
+						)
+				else:
+					om.MGlobal.displayWarning("No suggestion selected to accept.")
+
+			if arg_data.isFlagSet(self.kAcceptAllFlag):
+				if sculpt_capture.suggestions_enabled:
+					sculpt_capture.accept_all_suggestions()
+					om.MGlobal.displayInfo("Accepted all suggestions.")
+				else:
+					om.MGlobal.displayWarning(
+						"Suggestions are disabled. Cannot accept all."
+					)
+
+			if arg_data.isFlagSet(self.kRejectSelectedFlag):
+				selected_indexes = (
+					sculpting_tool_window.suggestion_tab.stroke_list.selectedIndexes()
+				)
+				if not selected_indexes:
+					om.MGlobal.displayWarning("Please select a suggestion to reject.")
+					return
+
+				selection_index = selected_indexes[0].row()
+
+				if sculpt_capture.suggestions_enabled:
+					sculpt_capture.reject_suggestion(selection_index)
+					om.MGlobal.displayInfo(
+						f"Rejected suggestion index {selection_index}."
+					)
+					if (
+						sculpting_tool_window.suggestion_tab.workflow
+						and 0
+						<= selection_index
+						< len(sculpting_tool_window.suggestion_tab.workflow.strokes)
+					):
+						del sculpting_tool_window.suggestion_tab.workflow.strokes[
+							selection_index
+						]
+						sculpting_tool_window.suggestion_tab.update(
+							sculpting_tool_window.suggestion_tab.workflow
+						)
+						sculpting_tool_window.suggestion_tab.sample_list.setRowCount(0)
+				else:
+					om.MGlobal.displayWarning(
+						"Suggestions are disabled. Cannot reject."
+					)
+
+		except Exception as e:
+			om.MGlobal.displayError(f"Error executing AutoSculptor action: {str(e)}")
+			import traceback
+
+			traceback.print_exc()
 
 
 def show_sculpting_tool_window_action():
@@ -284,7 +407,8 @@ def show_sculpting_tool_window_action():
 
 	import autosculptor.ui.ui as ui
 
-	ui.show_sculpting_tool_window()
+	global sculpting_tool_window
+	sculpting_tool_window = ui.show_sculpting_tool_window()
 
 
 def create_test_sphere_action():
@@ -311,6 +435,32 @@ def create_menu():
 		command=lambda *args: create_test_sphere_action(),
 	)
 
+	cmds.menuItem(
+		parent=menu_name,
+		label="Toggle Capture",
+		command=lambda *args: cmds.autoSculptorAction(toggleCapture=True),
+	)
+	cmds.menuItem(
+		parent=menu_name,
+		label="Toggle Suggestions",
+		command=lambda *args: cmds.autoSculptorAction(toggleSuggestions=True),
+	)
+	cmds.menuItem(
+		parent=menu_name,
+		label="Accept Selected Suggestion",
+		command=lambda *args: cmds.autoSculptorAction(acceptSelectedSuggestion=True),
+	)
+	cmds.menuItem(
+		parent=menu_name,
+		label="Accept All Suggestions",
+		command=lambda *args: cmds.autoSculptorAction(acceptAllSuggestions=True),
+	)
+	cmds.menuItem(
+		parent=menu_name,
+		label="Reject Selected Suggestion",
+		command=lambda *args: cmds.autoSculptorAction(rejectSelectedSuggestion=True),
+	)
+
 
 def initializePlugin(mobject):
 	mplugin = OpenMayaMPx.MFnPlugin(mobject, "AutoSculptor", "1.0", "Any")
@@ -320,30 +470,41 @@ def initializePlugin(mobject):
 			AutoSculptorTestCmd.cmdCreator,
 			AutoSculptorTestCmd.syntaxCreator,
 		)
-
-		mplugin.registerNode(
-			"autoSculptorDrawOverride",
-			AutoSculptorDrawNode.id,
-			AutoSculptorDrawNode.creator,
-			AutoSculptorDrawNode.initialize,
-			OpenMayaMPx.MPxNode.kLocatorNode,
-		)
-		omr.MDrawRegistry.registerDrawOverrideCreator(
-			SuggestionDrawer.drawDBClassification,
-			"autoSculptorDrawOverride",
-			SuggestionDrawer.creator,
-		)
-
 		mplugin.registerCommand(
-			AutoSculptorRestoreCameraCmd.kPluginCmdName,
-			AutoSculptorRestoreCameraCmd.cmdCreator,
-			AutoSculptorRestoreCameraCmd.syntaxCreator,
+			AutoSculptorActionCmd.kPluginCmdName,
+			AutoSculptorActionCmd.cmdCreator,
+			AutoSculptorActionCmd.syntaxCreator,
 		)
 
 		create_menu()
+		cmds.nameCommand(
+			"AutoSculptorToggleCaptureNamedCmd",
+			annotation="Toggle Capture",
+			command=f"cmds.{AutoSculptorActionCmd.kPluginCmdName}({AutoSculptorActionCmd.kToggleCaptureLongFlag}=True)",
+		)
+		cmds.nameCommand(
+			"AutoSculptorToggleSuggestionNamedCmd",
+			annotation="Toggle Suggestion",
+			command=f"cmds.{AutoSculptorActionCmd.kPluginCmdName}({AutoSculptorActionCmd.kToggleSuggestionsLongFlag}=True)",
+		)
+		cmds.nameCommand(
+			"AutoSculptorAcceptSelectedNamedCmd",
+			annotation="Accept Selected Suggestion(s)",
+			command=f"cmds.{AutoSculptorActionCmd.kPluginCmdName}({AutoSculptorActionCmd.kAcceptSelectedLongFlag}=True)",
+		)
+		cmds.nameCommand(
+			"AutoSculptorAcceptAllNamedCmd",
+			annotation="Accept All Suggestions",
+			command=f"cmds.{AutoSculptorActionCmd.kPluginCmdName}({AutoSculptorActionCmd.kAcceptAllLongFlag}=True)",
+		)
+		cmds.nameCommand(
+			"AutoSculptorRejectSelectedNamedCmd",
+			annotation="Reject Selected Suggestions",
+			command=f"cmds.{AutoSculptorActionCmd.kPluginCmdName}({AutoSculptorActionCmd.kRejectSelectedLongFlag}=True)",
+		)
 
 		om.MGlobal.displayInfo(
-			"AutoSculptor plugin loaded. UI, commands, and hotkeys registered!"
+			"AutoSculptor plugin loaded. UI and commands registered!"
 		)
 	except Exception as e:
 		sys.stderr.write(f"Failed to initialize AutoSculptor: {e}\n")
@@ -357,14 +518,8 @@ def uninitializePlugin(mobject):
 	mplugin = OpenMayaMPx.MFnPlugin(mobject)
 	try:
 		mplugin.deregisterCommand(AutoSculptorTestCmd.kPluginCmdName)
-		omr.MDrawRegistry.deregisterDrawOverrideCreator(
-			SuggestionDrawer.drawDBClassification, SuggestionDrawer.drawRegistrantId
-		)
-		mplugin.deregisterCommand(AutoSculptorRestoreCameraCmd.kPluginCmdName)
+		mplugin.deregisterCommand(AutoSculptorActionCmd.kPluginCmdName)
 
-		om.MGlobal.displayInfo(
-			"AutoSculptor plugin unloaded, command and draw override deregistered!"
-		)
 		cmds.deleteUI("AutoSculptorMenu", menu=True)
 
 		om.MGlobal.displayInfo("AutoSculptor plugin unloaded.")
