@@ -1,7 +1,7 @@
 from autosculptor.core.data_structures import Sample, Stroke, Workflow
 import numpy as np
 import maya.cmds as cmds  # type: ignore
-import maya.api.OpenMaya as om
+import maya.api.OpenMaya as om  # type: ignore
 import maya.utils
 import math
 
@@ -28,16 +28,16 @@ class StrokeVisualizer:
 	DEFAULT_COLOR = (1.0, 1.0, 0.0)
 	DEFAULT_TRANSPARENCY = (0.8, 0.8, 0.8)
 
-	def __init__(self, stroke, color=None, transparency=None):
+	def __init__(self, stroke_or_workflow, color=None, transparency=None):
 		"""
-		Initialize the StrokeVisualizer with a Stroke object.
+		Initialize the StrokeVisualizer with a Stroke object or a Workflow object.
 
 		Args:
-			stroke (Stroke): The stroke to visualize.
+			stroke_or_workflow (Union[Stroke, Workflow]): The stroke or workflow to visualize.
 			color (tuple, optional): RGB color tuple (e.g., (1.0, 0.0, 0.0) for red). Defaults to yellow.
 			transparency (tuple, optional): RGB transparency tuple (e.g., (0.5, 0.5, 0.5)). Defaults to semi-transparent.
 		"""
-		self.stroke = stroke
+		self.stroke_or_workflow = stroke_or_workflow
 		# Track all nodes created by this instance so that we can free up resources later
 		self.created_nodes = []
 
@@ -146,25 +146,46 @@ class StrokeVisualizer:
 
 	def visualize(self, radius=0.1, sections=8):
 		"""
-		Visualize the stroke as a tube in Maya.
+		Visualize the stroke(s) as tube(s) in Maya.
 
 		Args:
-			radius (float, optional): The radius of the tube. Defaults to 0.1.
+			radius (float, optional): The radius of the tube(s). Defaults to 0.1.
 			sections (int, optional): The number of sections for the circle profile. Defaults to 8.
 
 		Returns:
-			str: The name of the created tubular geometry.
+			List[str]: A list of names of the created tubular geometries.
 		"""
-		positions = [
-			numpy_to_mvector(sample.position) for sample in self.stroke.samples
-		]
+		created_tubes = []
+		strokes_to_visualize = []
 
-		if len(positions) < 2:
-			return None
+		if isinstance(self.stroke_or_workflow, Stroke):
+			strokes_to_visualize = [self.stroke_or_workflow]
+		elif isinstance(self.stroke_or_workflow, Workflow):
+			strokes_to_visualize = self.stroke_or_workflow.strokes
+		else:
+			print("StrokeVisualizer: Invalid input type for visualization.")
+			return []
 
-		tube = self.create_tube(positions, radius, sections)
+		for stroke in strokes_to_visualize:
+			if not stroke or not stroke.samples or len(stroke.samples) < 2:
+				print(
+					"StrokeVisualizer: Skipping visualization for empty or invalid stroke."
+				)
+				continue
 
-		return tube
+			positions = [numpy_to_mvector(sample.position) for sample in stroke.samples]
+
+			try:
+				tube = self.create_tube(positions, radius, sections)
+				if tube:
+					created_tubes.append(tube)
+			except Exception as e:
+				print(f"StrokeVisualizer: Error creating tube for stroke: {e}")
+				import traceback
+
+				traceback.print_exc()
+
+		return created_tubes
 
 	def clear(self):
 		"""

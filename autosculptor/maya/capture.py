@@ -2,7 +2,7 @@ import maya.cmds as cmds  # type: ignore
 import maya.OpenMayaUI as omui  # type: ignore
 import maya.OpenMaya as om  # type: ignore
 import maya.api.OpenMaya as om2  # type: ignore
-import maya.utils
+import maya.utils  # type: ignore
 import numpy as np  # type: ignore
 import time
 
@@ -155,6 +155,7 @@ def get_autosculpt_brush_mode(ctx, maya_tool_name):
 
 
 class SculptCapture:
+
 	INTERPOLATED_SAMPLES_PER_EVENT = 5
 	STROKE_END_TIMEOUT = 0.25
 	DEFAULT_CAMERA_DISTANCE_FACTOR = 5.0
@@ -291,7 +292,6 @@ class SculptCapture:
 				self.active_stroke_in_progress.add_sample(sample)
 
 	def get_world_space_positions(self, mesh_name):
-
 		try:
 			selection_list = om2.MSelectionList()
 			selection_list.add(mesh_name)
@@ -303,7 +303,6 @@ class SculptCapture:
 			return None
 
 	def get_world_space_normals(self, mesh_name):
-
 		try:
 			selection_list = om2.MSelectionList()
 			selection_list.add(mesh_name)
@@ -315,7 +314,6 @@ class SculptCapture:
 			return None
 
 	def get_active_sculpt_tool(self):
-
 		context = cmds.currentCtx()
 
 		if "sculptMesh" in context:
@@ -323,7 +321,6 @@ class SculptCapture:
 		return None
 
 	def get_brush_size_and_pressure(self, tool_name):
-
 		if not tool_name:
 			return None
 
@@ -342,7 +339,6 @@ class SculptCapture:
 			return 1.0, 1.0
 
 	def _ensure_synthesizer_mesh(self, mesh_data: MeshData):
-
 		if not self.synthesizer:
 			try:
 				self.synthesizer = StrokeSynthesizer(mesh_data)
@@ -372,7 +368,6 @@ class SculptCapture:
 				print(f"SculptCapture: Error initializing missing parameterizer: {e}")
 
 	def process_mesh_changes(self):
-
 		if not self.mesh_name:
 			return
 
@@ -709,7 +704,6 @@ class SculptCapture:
 					print(f"SculptCapture: Error visualizing suggestion: {viz_e}")
 
 	def get_selected_mesh_name(self):
-
 		selected_objects = cmds.ls(selection=True, long=True)
 		if not selected_objects:
 			om2.MGlobal.displayError("No object selected")
@@ -731,7 +725,6 @@ class SculptCapture:
 			return None
 
 	def generate_suggestions(self):
-
 		if not self.mesh_name or not cmds.objExists(self.mesh_name):
 			print("SculptCapture: Mesh no longer exists, clearing reference")
 			self.mesh_name = None
@@ -809,7 +802,6 @@ class SculptCapture:
 			self.previous_camera_state = None
 
 	def _update_auto_camera(self):
-
 		if not self.auto_camera_enabled:
 			return
 		if not self.current_suggestions:
@@ -866,7 +858,6 @@ class SculptCapture:
 			traceback.print_exc()
 
 	def restore_previous_camera(self):
-
 		if self.previous_camera_state is None:
 			print("No previous camera state stored to restore.")
 			return
@@ -951,7 +942,9 @@ class SculptCapture:
 		self.suggestion_visualizers.clear()
 
 	def set_active_context(self, indices: List[int]):
-		"""Sets the active context in the workflow and regenerates suggestions."""
+		"""
+		Sets the active context in the workflow and regenerates suggestions.
+		"""
 		if not self.current_workflow:
 			return
 		self.current_workflow.set_active_context(indices)
@@ -1197,17 +1190,16 @@ class SculptCapture:
 			if cmds.undoInfo(q=True, open=True):
 				cmds.undoInfo(closeChunk=True)
 
-	def apply_cloned_stroke(self, cloned_stroke: Stroke):
-
+	def apply_cloned_stroke(self, cloned_workflow: Workflow):
 		if not self.is_capturing:
 			raise RuntimeError("Cannot apply clone: Capture is not active.")
 		if not self.mesh_name or not cmds.objExists(self.mesh_name):
 			raise RuntimeError("Cannot apply clone: Target mesh not found.")
-		if not cloned_stroke or not cloned_stroke.samples:
-			raise ValueError("Cannot apply clone: Cloned stroke is invalid or empty.")
+		if not cloned_workflow or not cloned_workflow.strokes:
+			raise ValueError("Cannot apply clone: Cloned workflow is invalid or empty.")
 
 		print(
-			f"SculptCapture: Applying cloned stroke with {len(cloned_stroke.samples)} samples..."
+			f"SculptCapture: Applying cloned workflow with {len(cloned_workflow.strokes)} strokes..."
 		)
 
 		try:
@@ -1220,40 +1212,62 @@ class SculptCapture:
 			cmds.undoInfo(openChunk=True, chunkName="ApplyAutoSculptorClone")
 			undo_chunk_is_open = True
 
-			brush_class = None
-			if cloned_stroke.stroke_type == "surface":
-				brush_class = SurfaceBrush
-			elif cloned_stroke.stroke_type == "freeform":
-				brush_class = FreeformBrush
-			else:
-				if undo_chunk_is_open:
-					cmds.undoInfo(closeChunk=True)
-				raise ValueError(
-					f"Unknown stroke type for cloned stroke: {cloned_stroke.stroke_type}"
+			apply_success = True
+			total_samples_applied = 0
+
+			for stroke_index, cloned_stroke in enumerate(cloned_workflow.strokes):
+				if not cloned_stroke or not cloned_stroke.samples:
+					print(
+						f"  Warning: Skipping empty or invalid stroke at index {stroke_index}"
+					)
+					continue
+
+				brush_class = None
+				if cloned_stroke.stroke_type == "surface":
+					brush_class = SurfaceBrush
+				elif cloned_stroke.stroke_type == "freeform":
+					brush_class = FreeformBrush
+				else:
+					print(
+						f"  Warning: Unknown stroke type for cloned stroke at index {stroke_index}: {cloned_stroke.stroke_type}. Skipping."
+					)
+					continue
+
+				brush = brush_class(
+					size=cloned_stroke.brush_size or 1.0,
+					strength=cloned_stroke.brush_strength or 0.5,
+					mode=BrushMode[cloned_stroke.brush_mode]
+					if cloned_stroke.brush_mode
+					else BrushMode.ADD,
+					falloff=cloned_stroke.brush_falloff or "smooth",
+				)
+				print(
+					f"  Applying stroke {stroke_index+1}/{len(cloned_workflow.strokes)} using Brush: {brush_class.__name__}, Size: {brush.size:.2f}, Strength: {brush.strength:.2f}, Mode: {brush.mode.name}"
 				)
 
-			brush = brush_class(
-				size=cloned_stroke.brush_size or 1.0,
-				strength=cloned_stroke.brush_strength or 0.5,
-				mode=BrushMode[cloned_stroke.brush_mode]
-				if cloned_stroke.brush_mode
-				else BrushMode.ADD,
-				falloff=cloned_stroke.brush_falloff or "smooth",
+				num_applied_in_stroke = 0
+				for sample_index, sample in enumerate(cloned_stroke.samples):
+					# print(
+					# 	f"    Applying sample {sample_index+1}/{len(cloned_stroke.samples)} at {sample.position}"
+					# )
+					try:
+						brush.apply_to_mesh(mesh_data, sample)
+						num_applied_in_stroke += 1
+						total_samples_applied += 1
+					except Exception as apply_err:
+						print(
+							f"    Error applying cloned sample {sample_index} in stroke {stroke_index}: {apply_err}"
+						)
+						# print("     Skipping sample and attempting to continue...")
+						pass
+
+				print(
+					f"  Applied {num_applied_in_stroke} samples from stroke {stroke_index+1}."
+				)
+
+			print(
+				f"  Applied a total of {total_samples_applied} samples from cloned workflow."
 			)
-
-			apply_success = True
-			num_applied = 0
-			for i, sample in enumerate(cloned_stroke.samples):
-
-				try:
-					brush.apply_to_mesh(mesh_data, sample)
-					num_applied += 1
-				except Exception as apply_err:
-					print(f"  Error applying cloned sample {i}: {apply_err}")
-
-					print("   Skipping sample and attempting to continue...")
-
-			print(f"  Applied {num_applied} samples from cloned stroke.")
 
 			final_mesh_data = MeshInterface.get_mesh_data(self.mesh_name)
 			if final_mesh_data and self.synthesizer and self.synthesizer.parameterizer:
@@ -1261,19 +1275,23 @@ class SculptCapture:
 				camera_lookat = get_active_camera_lookat_vector()
 
 				try:
-					self.synthesizer.parameterizer.parameterize_stroke(
-						cloned_stroke, camera_lookat
-					)
+					for stroke_to_param in cloned_workflow.strokes:
+						self.synthesizer.parameterizer.parameterize_stroke(
+							stroke_to_param, camera_lookat
+						)
+					print("  Parameterized all applied clone strokes.")
 				except Exception as param_err:
 					print(
-						f"  Warning: Failed to parameterize applied clone stroke: {param_err}"
+						f"  Warning: Failed to parameterize applied clone strokes: {param_err}"
 					)
 			else:
 				print(
-					"  Warning: Could not re-parameterize applied clone stroke (missing synthesizer/parameterizer)."
+					"  Warning: Could not re-parameterize applied clone strokes (missing synthesizer/parameterizer)."
 				)
 
-			self.current_workflow.add_stroke(cloned_stroke)
+			for stroke_to_add in cloned_workflow.strokes:
+				self.current_workflow.add_stroke(stroke_to_add)
+
 			self.previous_positions[self.mesh_name] = (
 				final_mesh_data.vertices if final_mesh_data else mesh_data.vertices
 			)

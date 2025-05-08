@@ -212,6 +212,7 @@ class SculptingPanel(QWidget):
 		self.setLayout(layout)
 
 		self.workflow: Optional[Workflow] = None
+		self._active_context_indices: set = set()
 
 		self.history_visualizer: Optional[StrokeVisualizer] = None
 
@@ -220,7 +221,6 @@ class SculptingPanel(QWidget):
 		self.target_selection_scriptJob: Optional[int] = None
 		self.clone_visualizer: Optional[StrokeVisualizer] = None
 		self.pending_cloned_stroke: Optional[Stroke] = None
-		# self.update(generate_random_workflow(5))
 
 	def update(self, workflow):
 		"""
@@ -238,7 +238,7 @@ class SculptingPanel(QWidget):
 		except (TypeError, RuntimeError):
 			pass
 
-		active_context_indices = set(self.workflow.get_active_context_indices() or [])
+		active_context_indices = self._active_context_indices
 		for i, stroke in enumerate(self.workflow.strokes):
 			row_position = self.stroke_list.rowCount()
 			self.stroke_list.insertRow(row_position)
@@ -257,10 +257,6 @@ class SculptingPanel(QWidget):
 			)
 
 			items = [item_type, item_mode, item_count, item_size, item_strength]
-
-			if i in active_context_indices:
-				for item in items:
-					item.setBackground(self.CONTEXT_COLOR)
 
 			for item in items:
 				item.setFlags(item.flags() & ~Qt.ItemIsEditable)
@@ -281,6 +277,15 @@ class SculptingPanel(QWidget):
 			self.delete_stroke_btn.setEnabled(False)
 			self.clear_all_btn.setEnabled(False)
 			self.clone_stroke_btn.setEnabled(False)
+
+		if active_context_indices:
+			print("ACTIVE CONTEXT FOUND")
+			self.clear_context_btn.setEnabled(True)
+		else:
+			print("*****NO ACTIVE CONTEXT FOUND*****")
+			self.clear_context_btn.setEnabled(False)
+
+		self._apply_context_highlighting(active_context_indices)
 
 	def update_sample_list(self, stroke):
 		"""
@@ -307,6 +312,19 @@ class SculptingPanel(QWidget):
 			self.sample_list.setItem(
 				row_position, 4, QTableWidgetItem(approx(smp.timestamp))
 			)
+
+	def _apply_context_highlighting(self, active_context_indices):
+		"""Applies background highlighting to rows corresponding to active context strokes."""
+		default_color = self.palette().color(self.backgroundRole())
+		for row in range(self.stroke_list.rowCount()):
+			is_context = row in active_context_indices
+			for col in range(self.stroke_list.columnCount()):
+				item = self.stroke_list.item(row, col)
+				if item:
+					if is_context:
+						item.setBackground(self.CONTEXT_COLOR)
+					else:
+						item.setBackground(default_color)
 
 	def clear_history_visualization(self):
 		if self.history_visualizer:
@@ -441,7 +459,6 @@ class SculptingPanel(QWidget):
 			self.clear_clone_preview_visualization()
 
 	def on_delete_stroke(self):
-		# self.clear_history_visualization()
 		self.clear_clone_preview_visualization()
 
 		selected_indices = self.stroke_list.selectedIndexes()
@@ -475,31 +492,52 @@ class SculptingPanel(QWidget):
 		Updates the sample list based on the selected stroke.
 		"""
 		self.clear_history_visualization()  # Clear previous viz first
-		# self.clear_clone_preview_visualization()  # Clear pending clone viz?
+		self.clear_clone_preview_visualization()
 
 		selected_indexes = self.stroke_list.selectedIndexes()
 		selected_rows = sorted(list(set(index.row() for index in selected_indexes)))
 
-		if len(selected_rows) == 1:
-			selected_row = selected_rows[0]
-			if self.workflow and 0 <= selected_row < len(self.workflow.strokes):
-				selected_stroke = self.workflow.strokes[selected_row]
-				self.update_sample_list(selected_stroke)
+		if selected_rows:
+			if len(selected_rows) == 1:
+				selected_row = selected_rows[0]
+				if self.workflow and 0 <= selected_row < len(self.workflow.strokes):
+					selected_stroke = self.workflow.strokes[selected_row]
+					self.update_sample_list(selected_stroke)
+				else:
+					self.sample_list.setRowCount(0)
+			else:
+				self.sample_list.setRowCount(0)
 
-				if selected_stroke and selected_stroke.samples:
+			if self.workflow:
+				selected_strokes_workflow = Workflow()
+				for row in selected_rows:
+					if self.workflow and 0 <= row < len(self.workflow.strokes):
+						selected_strokes_workflow.add_stroke(self.workflow.strokes[row])
+
+				if selected_strokes_workflow.strokes:
 					try:
 						self.history_visualizer = StrokeVisualizer(
-							selected_stroke,
+							selected_strokes_workflow,
 							color=self.HISTORY_VIZ_COLOR,
 							transparency=self.HISTORY_VIZ_TRANSPARENCY,
 						)
-						viz_radius = (
-							selected_stroke.samples[0].size * 0.5
-							if selected_stroke.samples
-							else 0.2
+						avg_radius = 0.2
+						all_samples = [
+							smp
+							for stroke in selected_strokes_workflow.strokes
+							for smp in stroke.samples
+						]
+						if all_samples:
+							avg_radius = (
+								np.mean([smp.size for smp in all_samples]) * 0.5
+							)
+							avg_radius = max(0.2, avg_radius)
+
+						hist_viz_tubes = self.history_visualizer.visualize(
+							avg_radius, 8
 						)
-						hist_viz_tube = self.history_visualizer.visualize(viz_radius, 8)
-						if hist_viz_tube:
+
+						if hist_viz_tubes:
 							if not self.viz_display_layer or not cmds.objExists(
 								self.viz_display_layer
 							):
@@ -512,22 +550,22 @@ class SculptingPanel(QWidget):
 								)
 
 							cmds.editDisplayLayerMembers(
-								self.viz_display_layer, hist_viz_tube, noRecurse=True
+								self.viz_display_layer, hist_viz_tubes, noRecurse=True
 							)
-							# print(f"SculptingPanel: Added {hist_viz_tube} to layer {self.viz_display_layer}")
+							print(
+								f"SculptingPanel: Added {len(hist_viz_tubes)} history visualization tubes to layer {self.viz_display_layer}"
+							)
 						else:
 							print(
-								f"SculptingPanel: Failed to create history visualization for stroke {selected_row}"
+								f"SculptingPanel: Failed to create history visualization for selected strokes"
 							)
 					except ValueError as ve:
 						print(
-							f"SculptingPanel: Cannot visualize stroke {selected_row}: {ve}"
+							f"SculptingPanel: Cannot visualize selected strokes: {ve}"
 						)
 						self.history_visualizer = None
 					except Exception as e:
-						print(
-							f"SculptingPanel: Error visualizing history stroke {selected_row}: {e}"
-						)
+						print(f"SculptingPanel: Error visualizing history strokes: {e}")
 						import traceback
 
 						traceback.print_exc()
@@ -536,6 +574,7 @@ class SculptingPanel(QWidget):
 					self.sample_list.setRowCount(0)
 		else:
 			self.delete_stroke_btn.setEnabled(False)
+			self.set_context_btn.setEnabled(False)
 			self.clone_stroke_btn.setEnabled(False)
 			self.sample_list.setRowCount(0)
 
@@ -551,9 +590,7 @@ class SculptingPanel(QWidget):
 		self.delete_stroke_btn.setEnabled(has_selection)
 		self.set_context_btn.setEnabled(has_selection)
 
-		can_start_clone = (
-			has_selection and len(selected_rows) == 1 and is_capture_active
-		)
+		can_start_clone = has_selection and len(selected_rows) > 0 and is_capture_active
 		if (
 			not self.is_waiting_for_clone_target
 			and self.clone_stroke_btn.text() == "Clone Stroke"
@@ -578,6 +615,7 @@ class SculptingPanel(QWidget):
 			and main_window.sculpt_capture
 		):
 			main_window.sculpt_capture.set_active_context(selected_rows)
+			self._active_context_indices = set(selected_rows)
 			self.update(main_window.sculpt_capture.current_workflow)
 		else:
 			print("SculptingPanel: Capture system not available to set context.")
@@ -593,6 +631,7 @@ class SculptingPanel(QWidget):
 			and main_window.sculpt_capture
 		):
 			main_window.sculpt_capture.clear_active_context()
+			self._active_context_indices = set()
 			self.update(main_window.sculpt_capture.current_workflow)
 		else:
 			print("SculptingPanel: Capture system not available to clear context.")
@@ -614,10 +653,17 @@ class SculptingPanel(QWidget):
 
 		selected_indexes = self.stroke_list.selectedIndexes()
 		if not selected_indexes:
-			om2.MGlobal.displayWarning("Please select a history stroke to clone.")
+			om2.MGlobal.displayWarning(
+				"Please select one or more history strokes to clone."
+			)
 			return
 
-		self.source_stroke_for_clone_index = selected_indexes[0].row()
+		self.source_stroke_for_clone_index = sorted(
+			list(set(index.row() for index in selected_indexes))
+		)
+		print(
+			f"SculptingPanel: Source stroke indices for clone: {self.source_stroke_for_clone_index}"
+		)
 
 		if not cmds.selectMode(q=True, component=True):
 			cmds.selectMode(component=True)
@@ -663,7 +709,7 @@ class SculptingPanel(QWidget):
 		)
 
 	def _accept_cloned_stroke(self):
-		if not self.pending_cloned_stroke:
+		if not self.pending_cloned_stroke or not self.pending_cloned_stroke.strokes:
 			om2.MGlobal.displayWarning("No clone preview available to accept.")
 			return
 
@@ -740,8 +786,11 @@ class SculptingPanel(QWidget):
 		):
 			print("SculptingPanel: Capture system not available.")
 			return
-		if self.source_stroke_for_clone_index is None:
-			print("SculptingPanel: Error - Source stroke index lost.")
+		if (
+			self.source_stroke_for_clone_index is None
+			or not self.source_stroke_for_clone_index
+		):
+			print("SculptingPanel: Error - Source stroke indices lost or empty.")
 			return
 
 		sc = main_window.sculpt_capture
@@ -806,18 +855,30 @@ class SculptingPanel(QWidget):
 				self.source_stroke_for_clone_index = None
 				return
 
-			source_stroke = sc.current_workflow.strokes[
-				self.source_stroke_for_clone_index
+			source_strokes = [
+				sc.current_workflow.strokes[i]
+				for i in self.source_stroke_for_clone_index
+				if 0 <= i < len(sc.current_workflow.strokes)
 			]
-			if not source_stroke or not source_stroke.samples:
-				om2.MGlobal.displayError("Source stroke is empty.")
+
+			if not source_strokes:
+				om2.MGlobal.displayError(
+					"Selected source strokes are empty or invalid."
+				)
 				self.source_stroke_for_clone_index = None
 				return
-			source_anchor_pos = source_stroke.samples[0].position
-			source_anchor_normal = source_stroke.samples[0].normal
+
+			first_source_stroke = source_strokes[0]
+			if not first_source_stroke.samples:
+				om2.MGlobal.displayError("First selected source stroke is empty.")
+				self.source_stroke_for_clone_index = None
+				return
+
+			source_anchor_pos = first_source_stroke.samples[0].position
+			source_anchor_normal = first_source_stroke.samples[0].normal
 
 			cloned_workflow = sc.synthesizer.clone_workflow(
-				source_strokes=[source_stroke],
+				source_strokes=source_strokes,
 				source_anchor_pos=source_anchor_pos,
 				source_anchor_normal=source_anchor_normal,
 				target_anchor_pos=target_pos,
@@ -827,44 +888,70 @@ class SculptingPanel(QWidget):
 			)
 
 			if cloned_workflow and cloned_workflow.strokes:
-				self.pending_cloned_stroke = cloned_workflow.strokes[0]
+				self.pending_cloned_stroke = cloned_workflow
 				print(
-					f"SculptingPanel: Clone preview generated with {len(self.pending_cloned_stroke.samples)} samples."
+					f"SculptingPanel: Clone preview generated with {len(self.pending_cloned_stroke.strokes)} strokes."
 				)
+				for i, stroke in enumerate(self.pending_cloned_stroke.strokes):
+					print(f"  Stroke {i}: {len(stroke.samples)} samples")
 
-				self.clone_visualizer = StrokeVisualizer(
-					self.pending_cloned_stroke,
-					color=self.CLONE_VIZ_COLOR,
-					transparency=self.CLONE_VIZ_TRANSPARENCY,
-				)
-				viz_radius = 0.2
-				if (
-					self.pending_cloned_stroke
-					and self.pending_cloned_stroke.brush_size is not None
-				):
-					viz_radius = self.pending_cloned_stroke.brush_size * 0.5
-				clone_viz_tube = self.clone_visualizer.visualize(viz_radius, 8)
-
-				if clone_viz_tube:
-					if not self.viz_display_layer or not cmds.objExists(
-						self.viz_display_layer
+				try:
+					print("SculptingPanel: Attempting to visualize cloned strokes...")
+					self.clone_visualizer = StrokeVisualizer(
+						self.pending_cloned_stroke,
+						color=self.CLONE_VIZ_COLOR,
+						transparency=self.CLONE_VIZ_TRANSPARENCY,
+					)
+					avg_radius = 0.2
+					if (
+						self.pending_cloned_stroke.strokes
+						and self.pending_cloned_stroke.strokes[0].samples
 					):
-						self.viz_display_layer = cmds.createDisplayLayer(
-							name=self.VIZ_LAYER_NAME, number=1, empty=True
+						avg_radius = (
+							np.mean(
+								[
+									s.size
+									for s in self.pending_cloned_stroke.strokes[
+										0
+									].samples
+								]
+							)
+							* 0.5
 						)
-						cmds.setAttr(f"{self.viz_display_layer}.displayType", 2)
-						print(
-							f"SculptingPanel: Created display layer: {self.viz_display_layer}"
-						)
+						avg_radius = max(0.2, avg_radius)
 
-					cmds.editDisplayLayerMembers(
-						self.viz_display_layer, clone_viz_tube, noRecurse=True
-					)
+					clone_viz_tubes = self.clone_visualizer.visualize(avg_radius, 8)
 					print(
-						f"SculptingPanel: Added {clone_viz_tube} to layer {self.viz_display_layer}"
+						f"SculptingPanel: visualize returned {len(clone_viz_tubes) if clone_viz_tubes else 0} tubes."
 					)
-				else:
-					print(f"SculptingPanel: Failed to create clone visualization")
+
+					if clone_viz_tubes:
+						if not self.viz_display_layer or not cmds.objExists(
+							self.viz_display_layer
+						):
+							self.viz_display_layer = cmds.createDisplayLayer(
+								name=self.VIZ_LAYER_NAME, number=1, empty=True
+							)
+							cmds.setAttr(f"{self.viz_display_layer}.displayType", 2)
+							print(
+								f"SculptingPanel: Created display layer: {self.viz_display_layer}"
+							)
+
+						cmds.editDisplayLayerMembers(
+							self.viz_display_layer, clone_viz_tubes, noRecurse=True
+						)
+						print(
+							f"SculptingPanel: Added {len(clone_viz_tubes)} clone visualization tubes to layer {self.viz_display_layer}"
+						)
+					else:
+						print(f"SculptingPanel: Failed to create clone visualization")
+
+				except Exception as viz_e:
+					print(f"SculptingPanel: Error visualizing cloned strokes: {viz_e}")
+					import traceback
+
+					traceback.print_exc()
+					self.clone_visualizer = None
 
 				self.clone_stroke_btn.setText("Accept Clone")
 				self.clone_stroke_btn.setEnabled(True)
@@ -884,7 +971,7 @@ class SculptingPanel(QWidget):
 			pass
 
 	def on_accept_clone_clicked(self):
-		if not self.pending_cloned_stroke:
+		if not self.pending_cloned_stroke or not self.pending_cloned_stroke.strokes:
 			om2.MGlobal.displayWarning("No clone preview available to accept.")
 			return
 
@@ -944,7 +1031,6 @@ class SculptingPanel(QWidget):
 			self.clone_stroke_btn.setEnabled(False)
 			om2.MGlobal.displayInfo("Stroke history cleared.")  # type: ignore
 		else:
-			# Fallback for when capture is inactive or main_window is not AutoSculptorToolWindow
 			self.update(Workflow())
 			self.sample_list.setRowCount(0)
 			self.clear_history_visualization()
